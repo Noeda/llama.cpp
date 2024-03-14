@@ -8381,7 +8381,6 @@ struct llm_build_context {
         struct ggml_tensor * inpL;
 
         inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
-        cb(inpL, "inp_embd", -1);
 
         // inp_pos - contains the positions
         struct ggml_tensor * inp_pos = build_inp_pos();
@@ -8439,7 +8438,6 @@ struct llm_build_context {
                 cur = llm_build_kv(ctx0, model, hparams, kv_self, gf,
                         model.layers[il].wo, model.layers[il].bo,
                         Kcur, Vcur, Qcur, KQ_mask, nullptr, n_ctx, n_tokens, kv_head, n_kv, 1.0f/sqrtf(float(n_embd_head)), cb, il);
-                cb(cur, "kqv_out", il);
             }
 
             struct ggml_tensor * attn_out = cur;
