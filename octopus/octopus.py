@@ -477,7 +477,11 @@ class Experiment2QuantScheme:
                 futures = [executor.submit(evaluate_quant2, self, tensor_idxs_for_this_round, source_type_to_index, tensors_by_name, candidate, idx) for idx, candidate in enumerate(candidates)]
                 results = []
                 for result in tqdm.tqdm(cf.as_completed(futures), total=len(futures)):
-                    results.append(result.result())
+                    try:
+                        results.append(result.result())
+                    except Exception as e:
+                        sys.stderr.write(f'Error: {e}\n')
+                        raise
 
             results = sorted(results, key=lambda x: x[0])
             scores = [x[1] for x in results]
