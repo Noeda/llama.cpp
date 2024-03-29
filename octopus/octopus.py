@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 
+import faulthandler
+faulthandler.enable()
+
 import json
 import concurrent.futures as cf
 import collections
@@ -199,34 +202,157 @@ class Experiment1QuantScheme:
         for name, tensor in tensors_by_name.items():
             yield name, tensor[0]
 
-def evaluate_quant2(scheme, tensor_idxs_for_this_round, quant_to_parameter_dict, tensors_by_name, candidate, idx):
+from ephemeral_cache import ECache
+dcache = ECache()
+
+def evaluate_quant2_base_model(scheme, tensors_by_name, model_idx_to_use, model_name, max_workers=1):
+    global dcache
+
+    with cf.ThreadPoolExecutor(max_workers) as executor:
+        def handler(tensor_idx, original_target, source_tensors):
+            def compute_target(key):
+                if key[0] == 'target':
+                    return dequantize(original_target)
+                assert False
+
+            def action(target):
+                msesum = np.zeros(1, dtype=np.float64)
+                total_elems = 0
+
+                if model_idx_to_use == len(source_tensors):
+                    # deliberately use the target model, and
+                    # dequantize it twice (smoke testing)
+                    weight_vec = dequantize(original_target)
+                else:
+                    weight_vec = dequantize(source_tensors[model_idx_to_use])
+
+                msesum[0] += np.sum((weight_vec.astype(np.float64) - target.astype(np.float64)) ** 2)
+                total_elems += target.size
+
+                msesum = msesum.item()
+
+                return msesum, total_elems
+
+            return dcache.with_value(('target', tensor_idx), compute_target, action)
+
+        text = f'Quant MSE evaluator base model: {model_name}'
+
+        futs = []
+        for tensor_idx, (name, (target, source_tensors)) in enumerate(tensors_by_name.items()):
+            futs.append(executor.submit(handler, tensor_idx, target, source_tensors))
+
+        msesum = np.zeros(1, dtype=np.float64)
+        total_elems = 0
+
+        tq = tqdm.tqdm(cf.as_completed(futs), total=len(futs), desc=text)
+        for fut in tq:
+            try:
+                sub_msesum, sub_total_elems = fut.result()
+            except Exception as e:
+                # Eagerly print the exception, and then re-raise it
+                sys.stderr.write(f'Error in {model_name}: {e}\n')
+                raise
+            msesum[0] += sub_msesum
+            total_elems += sub_total_elems
+
+            tq.set_postfix({f'RMSE': np.sqrt(msesum[0] / total_elems)})
+
+    return model_name, np.sqrt(msesum[0] / total_elems)
+
+def evaluate_quant2(scheme, tensor_idxs_for_this_round, quant_to_parameter_dict, tensors_by_name, candidate, idx, max_workers=1):
+    global dcache
+
     score = 0
 
-    bias = np.float32(candidate[-1])
-    weight_nps = [np.float32(x) for x in candidate[:-1]]
+    bias = np.float32(0.0)
+    weight_nps = np.zeros(1, dtype=np.float32)
+
+    random_weights_baseline_calculation = False
+
+    if candidate is not None:
+        bias = np.float32(candidate[-1])
+        weight_nps = [np.float32(x) for x in candidate[:-1]]
+    else:
+        random_weights_baseline_calculation = True
 
     mses = []
     n_tensors = len(tensors_by_name)
-    text = 'progressbar #{position}'.format(position=idx)
+    text = 'Quant MSE evaluator idx=#{position}'.format(position=idx)
 
-    tensor_idxs_for_this_round = set(tensor_idxs_for_this_round)
+    if tensor_idxs_for_this_round is not None:
+        tensor_idxs_for_this_round = set(tensor_idxs_for_this_round)
 
     msesum = np.zeros(1, dtype=np.float64)
     total_elems = 0
 
-    for tensor_idx, (name, (target, source_tensors)) in enumerate(tqdm.tqdm(tensors_by_name.items(), total=n_tensors, desc=text)):
-        if tensor_idx not in tensor_idxs_for_this_round:
-            continue
+    with cf.ThreadPoolExecutor(max_workers) as executor:
+        def handler(tensor_idx, target, source_tensors):
+            if tensor_idx is not None and tensor_idxs_for_this_round is not None and tensor_idx not in tensor_idxs_for_this_round:
+                return 0, 0
 
-        result = bias
-        for source in source_tensors:
-            result += weight_nps[quant_to_parameter_dict[source.tensor_type]] * dequantize(source)
+            msesum = np.zeros(1, dtype=np.float64)
+            total_elems = 0
 
-        target = dequantize(target)
-        msesum[0] += np.sum((result.astype(np.float64) - target.astype(np.float64)) ** 2)
-        total_elems += target.size
+            def compute_target(key):
+                assert key[1] == tensor_idx
+                if key[0] == 'target':
+                    return dequantize(target)
+                if key[0] == 'source':
+                    return (dequantize(source_tensors[key[2]]), source_tensors[key[2]].tensor_type)
+                assert False
 
-    score = np.sqrt(msesum[0] / total_elems)
+            def action(val):
+                target = val[0]
+                source_tensors = val[1:]
+
+                nonlocal msesum, total_elems
+
+                if random_weights_baseline_calculation:
+                    mean = np.mean(target)
+                    std = np.std(target)
+
+                    rand_noise = np.random.normal(mean, std, target.shape)
+                    msesum[0] += np.sum((rand_noise.astype(np.float64) - target.astype(np.float64)) ** 2)
+                    total_elems += target.size
+                else:
+                    result = bias
+                    for source, tensor_type in source_tensors:
+                        weight = weight_nps[quant_to_parameter_dict[tensor_type]]
+                        if weight != 0.0:
+                            result += weight * source
+
+                    msesum[0] += np.sum((result.astype(np.float64) - target.astype(np.float64)) ** 2)
+                    total_elems += target.size
+
+                return msesum.item(), total_elems
+
+            keys = []
+            keys.append(('target', tensor_idx))
+            for idx in range(len(source_tensors)):
+                keys.append(('source', tensor_idx, idx))
+
+            return dcache.with_values(keys, compute_target, action)
+
+
+        it = tensors_by_name.items()
+        if max_workers == 1:
+            tq = tqdm.tqdm(tensors_by_name.items(), total=n_tensors, desc=text)
+            for tensor_idx, (name, (target, source_tensors)) in enumerate(tq):
+                sub_msesum, sub_total_elems = handler(tensor_idx, target, source_tensors)
+                msesum[0] += sub_msesum
+                total_elems += sub_total_elems
+
+                if total_elems > 0:
+                    tq.set_postfix({f'RMSE {idx}': np.sqrt(msesum[0] / total_elems)})
+        else:
+            futures = [executor.submit(handler, tensor_idx, target, source_tensors) for tensor_idx, (name, (target, source_tensors)) in enumerate(it)]
+            for future in tqdm.tqdm(cf.as_completed(futures), total=n_tensors, desc=text):
+                sub_msesum, sub_total_elems = future.result()
+                msesum[0] += sub_msesum
+                total_elems += sub_total_elems
+
+
+    score = np.sqrt(msesum[0] / total_elems) # RMSE
 
     return (idx, score)
 
@@ -237,7 +363,7 @@ class Experiment2QuantScheme:
     def name(self):
         return "linear combination of all the quants, optimized for minimum MSE"
 
-    def train(self, tensors_by_name):
+    def train(self, tensors_by_name, target_name, model_idx_to_model_name):
         import cma
         import sqlite3
 
@@ -246,8 +372,25 @@ class Experiment2QuantScheme:
         conn = sqlite3.connect('train_results.sqlite3')
         cursor = conn.cursor()
 
-        cursor.execute('CREATE TABLE IF NOT EXISTS train_results (now DATETIME DEFAULT CURRENT_TIMESTAMP, model TEXT NOT NULL, score REAL NOT NULL, epoch INTEGER)')
+        cursor.execute('CREATE TABLE IF NOT EXISTS train_results (now DATETIME DEFAULT CURRENT_TIMESTAMP, model TEXT NOT NULL, rmse REAL NOT NULL, random_baseline_adjusted_rmse_score REAL NOT NULL, balanced_baseline_adjusted_rmse_score REAL NOT NULL, epoch INTEGER NOT NULL, cmaes_sigma REAL)')
+        cursor.execute('CREATE TABLE IF NOT EXISTS random_baseline_score ( random_baseline_score REAL NOT NULL )')
+        cursor.execute('CREATE TABLE IF NOT EXISTS balanced_baseline_score ( balanced_baseline_score REAL NOT NULL )')
+        cursor.execute('CREATE TABLE IF NOT EXISTS baseline_scores_by_source_model ( source_model TEXT NOT NULL, baseline_score REAL NOT NULL )')
         conn.commit()
+
+        # get the baseline score, if it exists
+        random_baseline_score = None
+        for row in cursor.execute('SELECT random_baseline_score FROM random_baseline_score LIMIT 1'):
+            random_baseline_score = row[0]
+            print('Re-using random baseline score:', random_baseline_score)
+            break
+
+        if random_baseline_score is None:
+            # baseline score (random; computed if we pass None for a candidate)
+            _, random_baseline_score = evaluate_quant2(self, None, None, tensors_by_name, None, None, max_workers=16)
+
+            cursor.execute('INSERT INTO random_baseline_score (random_baseline_score) VALUES (?)', (random_baseline_score,))
+            conn.commit()
 
         # every distinct type we see in the source tensors gets a weight
         # parameter.
@@ -265,6 +408,45 @@ class Experiment2QuantScheme:
         # the last parameter is for bias.
         source_type_to_index = dict(zip(source_types, range(n_source_models)))
 
+        # initial candidate; which has bias 0 and just perfectly averages all the
+        # sources.
+        src_vec = (n_source_models + 1) * [1.0/n_tensors]
+        src_vec[-1] = 0.0
+
+        with cf.ThreadPoolExecutor(max_workers=16) as executor:
+            futs = []
+
+            check_models = [(idx, name) for idx, name in model_idx_to_model_name.items()]
+            # add the target model too; it's a smoke test that it should get a score of 0
+            check_models.append((len(model_idx_to_model_name), target_name))
+
+            for idx, name in check_models:
+                baseline_score = None
+                for row in cursor.execute('SELECT baseline_score FROM baseline_scores_by_source_model WHERE source_model = ? LIMIT 1', (name,)):
+                    baseline_score = row[0]
+
+                if baseline_score is None:
+                    fut = executor.submit(evaluate_quant2_base_model, self, tensors_by_name, idx, name, max_workers=1)
+                    futs.append(fut)
+
+            for fut in tqdm.tqdm(cf.as_completed(futs), total=len(futs)):
+                name, rmse = fut.result()
+                cursor.execute('INSERT INTO baseline_scores_by_source_model (source_model, baseline_score) VALUES (?, ?)', (name, rmse))
+                conn.commit()
+
+        balanced_baseline_score = None
+
+        for row in cursor.execute('SELECT balanced_baseline_score FROM balanced_baseline_score LIMIT 1'):
+            balanced_baseline_score = row[0]
+            print('Re-using balanced baseline score:', balanced_baseline_score)
+            break
+
+        if balanced_baseline_score is None:
+            _, balanced_baseline_score = evaluate_quant2(self, None, source_type_to_index, tensors_by_name, src_vec, 0, max_workers=16)
+
+            cursor.execute('INSERT INTO balanced_baseline_score (balanced_baseline_score) VALUES (?)', (balanced_baseline_score,))
+            conn.commit()
+
         # Here is the scheme:
         # For every model we are using as a source, learn a multiplier.
         # Also learn a bias term.
@@ -278,9 +460,6 @@ class Experiment2QuantScheme:
         # Optimized with CMA-ES ... because that felt easiest to code.
         # We are using the entire model for MSE calculations, and the cma
         # ask/tell interface, and some threads to make this use all the CPUs.
-
-        src_vec = (n_source_models + 1) * [1.0/n_tensors]
-        src_vec[-1] = 0.0
 
         es = cma.CMAEvolutionStrategy(src_vec, 0.02, {'popsize': 16})
 
@@ -319,7 +498,13 @@ class Experiment2QuantScheme:
                 'weights': dict([(k.name, best_candidate[v]) for k, v in source_type_to_index.items()])
             }
 
-            cursor.execute('INSERT INTO train_results (model, score, epoch) VALUES (?, ?, ?)', (json.dumps(model_json, indent=4, sort_keys=True), results[0][1].item(), epoch))
+            rmse = results[0][1].item()
+            rmse_random_baseline_adjusted = rmse / random_baseline_score
+            rmse_balanced_baseline_adjusted = rmse / balanced_baseline_score
+
+            cmaes_sigma = es.sigma
+
+            cursor.execute('INSERT INTO train_results (model, rmse, random_baseline_adjusted_rmse_score, balanced_baseline_adjusted_rmse_score, epoch, cmaes_sigma) VALUES (?, ?, ?, ?, ?, ?)', (json.dumps(model_json, indent=4, sort_keys=True), rmse, rmse_random_baseline_adjusted, rmse_balanced_baseline_adjusted, epoch, cmaes_sigma))
             conn.commit()
 
 
@@ -432,6 +617,8 @@ def train(target_model, models, scheme):
         tensors.add(tensor.name)
     model_readers = [GGUFReader(model, 'r') for model in models]
 
+    model_idx_to_model_name = dict([(idx, model) for idx, model in enumerate(models)])
+
     tensors_by_name = {}
     for tensor in tensors:
         target_tensor = get_tensor(target_reader, tensor)
@@ -441,7 +628,7 @@ def train(target_model, models, scheme):
             model_tensors.append(model_tensor)
         tensors_by_name[tensor] = (target_tensor, model_tensors)
 
-    result = scheme.train(tensors_by_name)
+    result = scheme.train(tensors_by_name, target_model, model_idx_to_model_name)
 
     print("Training complete: ", result)
 
