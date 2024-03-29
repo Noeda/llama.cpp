@@ -108,6 +108,8 @@ def arg_parser():
     parser = argparse.ArgumentParser(description='Octopus merge thing')
     parser.add_argument('model', type=str, help='GGUF model to use. Specify more than one, or this script is not really useful.', nargs='+')
     parser.add_argument('--train', help='Train an octopus quant model. The model with highest precision will be used as the target.', default=False, action='store_true')
+    parser.add_argument('--state-file', help='State file to use for training. It will be an sqlite3 file, so you might want to use a .sqlite3 extension.', type=str, default='train_results.sqlite3')
+
     return parser
 
 def get_file_host_endian(reader: GGUFReader) -> tuple[str, str]:
@@ -168,7 +170,7 @@ def main():
 
     if args.train:
         train(target_model = highest_precision_model,
-              scheme = Experiment2QuantScheme(),
+              scheme = Experiment2QuantScheme(args.state_file),
               models = models)
     else:
         # remove test.gguf
@@ -357,8 +359,8 @@ def evaluate_quant2(scheme, tensor_idxs_for_this_round, quant_to_parameter_dict,
     return (idx, score)
 
 class Experiment2QuantScheme:
-    def __init__(self):
-        pass
+    def __init__(self, train_results_filepath):
+        self.train_results_filepath = train_results_filepath
 
     def name(self):
         return "linear combination of all the quants, optimized for minimum MSE"
@@ -369,7 +371,7 @@ class Experiment2QuantScheme:
 
         print('Updating results in train_results.sqlite3')
 
-        conn = sqlite3.connect('train_results.sqlite3')
+        conn = sqlite3.connect(self.train_results_filepath)
         cursor = conn.cursor()
 
         cursor.execute('CREATE TABLE IF NOT EXISTS train_results (now DATETIME DEFAULT CURRENT_TIMESTAMP, model TEXT NOT NULL, rmse REAL NOT NULL, random_baseline_adjusted_rmse_score REAL NOT NULL, balanced_baseline_adjusted_rmse_score REAL NOT NULL, epoch INTEGER NOT NULL, cmaes_sigma REAL)')
