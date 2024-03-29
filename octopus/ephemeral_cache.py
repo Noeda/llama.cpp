@@ -56,8 +56,6 @@ class ECache:
                         self.lock.acquire()
 
                 while waitables:
-                    self.cond.wait()
-
                     new_waitables = []
                     for idx, key in waitables:
                         if self.cache[key][2] == False:
@@ -66,6 +64,7 @@ class ECache:
                         new_waitables.append((idx, key))
 
                     waitables = new_waitables
+                    self.cond.wait()
 
                 acquired = False
                 self.lock.release()
