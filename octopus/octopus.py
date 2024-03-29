@@ -16,6 +16,7 @@ import sys
 import gnuplotlib as gp
 import ctypes
 import tqdm
+import random
 
 llama_base = '.'
 if "NO_LOCAL_GGUF" not in os.environ and (Path(__file__).parent.parent / 'gguf-py').exists():
@@ -261,19 +262,30 @@ def evaluate_quant2_base_model(scheme, tensors_by_name, model_idx_to_use, model_
 
     return model_name, np.sqrt(msesum[0] / total_elems)
 
-def evaluate_quant2(scheme, tensor_idxs_for_this_round, quant_to_parameter_dict, tensors_by_name, candidate, idx, max_workers=1):
+def evaluate_quant2(scheme,
+                    tensor_idxs_for_this_round,
+                    quant_combo_to_idx_dict,
+                    quant_to_parameter_dict,
+                    tensors_by_name,
+                    candidate,
+                    idx,
+                    max_workers=1):
     global dcache
 
     score = 0
 
-    bias = np.float32(0.0)
+    bias_nps = np.zeros(1, dtype=np.float32)
     weight_nps = np.zeros(1, dtype=np.float32)
 
     random_weights_baseline_calculation = False
 
     if candidate is not None:
-        bias = np.float32(candidate[-1])
-        weight_nps = [np.float32(x) for x in candidate[:-1]]
+        cutoff = len(quant_to_parameter_dict) * len(quant_combo_to_idx_dict)
+        weight_nps = [np.float32(x) for x in candidate[:cutoff]]
+        bias_nps = [np.float32(x) for x in candidate[cutoff:]]
+
+        assert len(bias_nps) == len(quant_combo_to_idx_dict)
+        assert len(weight_nps) % len(quant_to_parameter_dict) == 0
     else:
         random_weights_baseline_calculation = True
 
@@ -294,6 +306,9 @@ def evaluate_quant2(scheme, tensor_idxs_for_this_round, quant_to_parameter_dict,
 
             msesum = np.zeros(1, dtype=np.float64)
             total_elems = 0
+
+            quant_combo = compute_quant_combo([x.tensor_type for x in source_tensors])
+            quant_combo_idx = quant_combo_to_idx_dict[quant_combo]
 
             def compute_target(key):
                 assert key[1] == tensor_idx
@@ -317,9 +332,14 @@ def evaluate_quant2(scheme, tensor_idxs_for_this_round, quant_to_parameter_dict,
                     msesum[0] += np.sum((rand_noise.astype(np.float64) - target.astype(np.float64)) ** 2)
                     total_elems += target.size
                 else:
-                    result = bias
+                    if len(bias_nps) == 1:
+                        result = np.ones(target.shape, dtype=np.float32) * bias_nps[0]
+                    else:
+                        result = np.ones(target.shape, dtype=np.float32) * bias_nps[quant_combo_idx]
+
                     for source, tensor_type in source_tensors:
-                        weight = weight_nps[quant_to_parameter_dict[tensor_type]]
+                        weight_idx = quant_combo_idx * len(quant_to_parameter_dict) + quant_to_parameter_dict[tensor_type]
+                        weight = weight_nps[weight_idx]
                         if weight != 0.0:
                             result += weight * source
 
@@ -358,6 +378,13 @@ def evaluate_quant2(scheme, tensor_idxs_for_this_round, quant_to_parameter_dict,
 
     return (idx, score)
 
+def compute_quant_combo(source_tensors):
+    comb = []
+    for tensor_type in source_tensors:
+        comb.append(tensor_type)
+    comb = tuple(sorted(comb))
+    return comb
+
 class Experiment2QuantScheme:
     def __init__(self, train_results_filepath):
         self.train_results_filepath = train_results_filepath
@@ -389,7 +416,7 @@ class Experiment2QuantScheme:
 
         if random_baseline_score is None:
             # baseline score (random; computed if we pass None for a candidate)
-            _, random_baseline_score = evaluate_quant2(self, None, None, tensors_by_name, None, None, max_workers=16)
+            _, random_baseline_score = evaluate_quant2(self, None, None, None, tensors_by_name, None, None, max_workers=16)
 
             cursor.execute('INSERT INTO random_baseline_score (random_baseline_score) VALUES (?)', (random_baseline_score,))
             conn.commit()
@@ -406,14 +433,27 @@ class Experiment2QuantScheme:
         assert len(source_types) > 0
         n_source_models = len(source_types)
 
+        # calculate what quant combos exist
+        quant_combo_to_idx_dict = {}
+        counter = 0
+        for name, (target, tensors) in tensors_by_name.items():
+            comb = compute_quant_combo([x.tensor_type for x in tensors])
+            if comb not in quant_combo_to_idx_dict:
+                quant_combo_to_idx_dict[comb] = counter
+                counter += 1
+
+        print('--- List of different combinations of quantizations ---')
+        for combo, idx in quant_combo_to_idx_dict.items():
+            print(f'{tuple(map(lambda x: x.name, combo))} -> {idx}')
+
         # simple map from type to Nth parameter
         # the last parameter is for bias.
         source_type_to_index = dict(zip(source_types, range(n_source_models)))
 
         # initial candidate; which has bias 0 and just perfectly averages all the
         # sources.
-        src_vec = (n_source_models + 1) * [1.0/n_tensors]
-        src_vec[-1] = 0.0
+        src_vec = (n_source_models * len(quant_combo_to_idx_dict) * [1.0/n_tensors]) + \
+                  (len(quant_combo_to_idx_dict) * [0.0])
 
         with cf.ThreadPoolExecutor(max_workers=16) as executor:
             futs = []
@@ -444,7 +484,7 @@ class Experiment2QuantScheme:
             break
 
         if balanced_baseline_score is None:
-            _, balanced_baseline_score = evaluate_quant2(self, None, source_type_to_index, tensors_by_name, src_vec, 0, max_workers=16)
+            _, balanced_baseline_score = evaluate_quant2(self, None, None, source_type_to_index, tensors_by_name, src_vec, 0, max_workers=16)
 
             cursor.execute('INSERT INTO balanced_baseline_score (balanced_baseline_score) VALUES (?)', (balanced_baseline_score,))
             conn.commit()
@@ -471,14 +511,68 @@ class Experiment2QuantScheme:
 
         while True:
             epoch += 1
-            tensor_idxs_for_this_round = np.random.choice(n_tensors, size=10, replace=False)
+
+            tensor_idxs_for_this_round = set()
+
+            # Sort of stratified sampling:
+            # 1. at least 10 tensors
+            # 2. at least one example of each quant combo
+
+            # 3. after initial selection, if there's more than 20 tensors,
+            # then: at least for 1000 failed tries, try to remove tensors until
+            # we are at most 20.
+            quants_are_covered = False
+            failed_tries = 0
+            while True:
+                if quants_are_covered and len(tensor_idxs_for_this_round) >= 10 and len(tensor_idxs_for_this_round) <= 20:
+                    break
+
+                if not quants_are_covered:
+                    candidate_idx = random.randint(0, n_tensors - 1)
+                    tensor_idxs_for_this_round.add(candidate_idx)
+
+                    covered_quant_combos = set()
+                    for idx, (_name, (_target, source_tensors)) in enumerate(tensors_by_name.items()):
+                        if idx not in tensor_idxs_for_this_round:
+                            continue
+
+                        quant_combo = compute_quant_combo([x.tensor_type for x in source_tensors])
+                        covered_quant_combos.add(quant_combo)
+
+                    quants_are_covered = len(covered_quant_combos) == len(quant_combo_to_idx_dict)
+                elif len(tensor_idxs_for_this_round) < 10:
+                    candidate_idx = random.randint(0, n_tensors - 1)
+                    tensor_idxs_for_this_round.add(candidate_idx)
+                elif len(tensor_idxs_for_this_round) > 20:
+                    if failed_tries > 1000:
+                        break
+                    candidate_idx = random.choice(list(tensor_idxs_for_this_round))
+
+                    covered_quant_combos = set()
+                    for idx, (_name, (_target, source_tensors)) in enumerate(tensors_by_name.items()):
+                        if idx not in tensor_idxs_for_this_round or idx == candidate_idx:
+                            continue
+
+                        quant_combo = compute_quant_combo([x.tensor_type for x in source_tensors])
+                        covered_quant_combos.add(quant_combo)
+
+                    quants_would_be_covered = len(covered_quant_combos) == len(quant_combo_to_idx_dict)
+                    if not quants_would_be_covered:
+                        failed_tries += 1
+                    else:
+                        tensor_idxs_for_this_round.remove(candidate_idx)
+
+            tensor_idxs_for_this_round = list(tensor_idxs_for_this_round)
+
+            print(f'Epoch {epoch} starting')
+            print('Number of samples:', len(tensor_idxs_for_this_round))
 
             candidates = es.ask()
 
             with cf.ThreadPoolExecutor() as executor:
-                futures = [executor.submit(evaluate_quant2, self, tensor_idxs_for_this_round, source_type_to_index, tensors_by_name, candidate, idx) for idx, candidate in enumerate(candidates)]
+                futures = [executor.submit(evaluate_quant2, self, tensor_idxs_for_this_round, quant_combo_to_idx_dict, source_type_to_index, tensors_by_name, candidate, idx) for idx, candidate in enumerate(candidates)]
                 results = []
-                for result in tqdm.tqdm(cf.as_completed(futures), total=len(futures)):
+                for result in cf.as_completed(futures):
                     try:
                         results.append(result.result())
                     except Exception as e:
@@ -499,10 +593,21 @@ class Experiment2QuantScheme:
 
             best_candidate = candidates[results[0][0]]
 
-            model_json = {
-                'bias': best_candidate[-1],
-                'weights': dict([(k.name, best_candidate[v]) for k, v in source_type_to_index.items()])
-            }
+            # build a human-readable JSON to stare at weights.
+            model_json = {}
+
+            cutoff = len(source_type_to_index) * len(quant_combo_to_idx_dict)
+
+            for combo, idx in quant_combo_to_idx_dict.items():
+                name = 'bias_' + '_'.join([str(x.name) for x in combo])
+                model_json[name] = best_candidate[cutoff + idx]
+
+            for combo, idx in quant_combo_to_idx_dict.items():
+                weights = {}
+                name = 'weights_' + '_'.join([str(x.name) for x in combo])
+                for src_type, tgt_idx in source_type_to_index.items():
+                    weights[src_type.name] = best_candidate[idx * len(source_type_to_index) + tgt_idx]
+                model_json[name] = weights
 
             rmse = results[0][1].item()
             rmse_random_baseline_adjusted = rmse / random_baseline_score
