@@ -282,7 +282,7 @@ class Experiment2QuantScheme:
         src_vec = (n_source_models + 1) * [1.0/n_tensors]
         src_vec[-1] = 0.0
 
-        es = cma.CMAEvolutionStrategy(src_vec, 0.02)
+        es = cma.CMAEvolutionStrategy(src_vec, 0.02, {'popsize': 16})
 
         n_tensors = len(tensors_by_name)
 
