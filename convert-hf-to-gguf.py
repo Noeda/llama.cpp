@@ -2369,8 +2369,9 @@ class CommandR2Model(Model):
             if name.endswith((".attention.masked_bias", ".attention.bias", ".attention.rotary_emb.inv_freq")):
                 continue
 
-            if name.endswith('q_norm.weight') or name.endswith('k_norm.weight'):
-                data_torch = data_torch.transpose(1, 0)
+            #if name.endswith('q_norm.weight') or name.endswith('k_norm.weight'):
+            #    print('transposed')
+            #    data_torch = data_torch.transpose(1, 0)
 
             old_dtype = data_torch.dtype
 

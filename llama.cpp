@@ -9492,49 +9492,59 @@ struct llm_build_context {
                     cb(Vcur, "Vcur", il);
                 }
 
-                if (model.layers[il].attn_q_norm) {
-                    Qcur = ggml_cont(ctx0, ggml_reshape_3d(ctx0, Qcur, n_embd_head_k, n_head, n_tokens));
-                    cb(Qcur, "Qcur", il);
+                if(model.layers[il].attn_q_norm)
+                {
+                    struct ggml_tensor * attn_q_norm = ggml_cont(ctx0, ggml_transpose(ctx0, model.layers[il].attn_q_norm));
+                    struct ggml_tensor * attn_k_norm = ggml_cont(ctx0, ggml_transpose(ctx0, model.layers[il].attn_k_norm));
+
+                    /*
+                    if (model.layers[il].attn_q_norm) {
+                        struct ggml_tensor * q = model.layers[il].attn_q_norm;
+                        printf("%g %g %g %g %g\n", ggml_get_f32_1d(q, 0), ggml_get_f32_1d(q, 1), ggml_get_f32_1d(q, 2), ggml_get_f32_1d(q, 3), ggml_get_f32_1d(q, 4));
+                    }
+                    abort();
+                    */
+
+                    /*
+                    printf("Qcur dims: %d %d %d %d\n", Qcur->ne[0], Qcur->ne[1], Qcur->ne[2], Qcur->ne[3]);
+                    printf("Kcur dims: %d %d %d %d\n", Kcur->ne[0], Kcur->ne[1], Kcur->ne[2], Kcur->ne[3]);
+                    printf("attn_q_norm dims_original: %d %d %d %d\n", model.layers[il].attn_q_norm->ne[0], model.layers[il].attn_q_norm->ne[1], model.layers[il].attn_q_norm->ne[2], model.layers[il].attn_q_norm->ne[3]);
+                    printf("attn_q_norm dims: %d %d %d %d\n", attn_q_norm->ne[0], attn_q_norm->ne[1], attn_q_norm->ne[2], attn_q_norm->ne[3]);
+                    printf("attn_k_norm dims_original: %d %d %d %d\n", model.layers[il].attn_k_norm->ne[0], model.layers[il].attn_k_norm->ne[1], model.layers[il].attn_k_norm->ne[2], model.layers[il].attn_k_norm->ne[3]);
+                    printf("attn_k_norm dims: %d %d %d %d\n", attn_k_norm->ne[0], attn_k_norm->ne[1], attn_k_norm->ne[2], attn_k_norm->ne[3]);
+                    printf("n_tokens: %d\n", n_tokens);
+                    printf("after\n");
+                    */
+
+                    Qcur = ggml_cont(ctx0, ggml_view_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens,
+                            ggml_element_size(Qcur) * n_embd_head,
+                            ggml_element_size(Qcur) * n_embd_head * n_head,
+                            0));
+                    Kcur = ggml_cont(ctx0, ggml_view_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens,
+                            ggml_element_size(Kcur) * n_embd_head,
+                            ggml_element_size(Kcur) * n_embd_head * n_head_kv,
+                            0));
+
+                    printf("Qcur dims: %d %d %d %d\n", Qcur->ne[0], Qcur->ne[1], Qcur->ne[2], Qcur->ne[3]);
+                    printf("Kcur dims: %d %d %d %d\n", Kcur->ne[0], Kcur->ne[1], Kcur->ne[2], Kcur->ne[3]);
+                    printf("---\n");
+                    //printf("Kcur dims: %d %d %d %d\n", Kcur->ne[0], Kcur->ne[1], Kcur->ne[2], Kcur->ne[3]);
+                    //printf("attn_q_norm dims: %d %d %d %d\n", attn_q_norm->ne[0], attn_q_norm->ne[1], attn_q_norm->ne[2], attn_q_norm->ne[3]);
+                    //printf("attn_k_norm dims: %d %d %d %d\n", attn_k_norm->ne[0], attn_k_norm->ne[1], attn_k_norm->ne[2], attn_k_norm->ne[3]);
+
+                    //printf("qcont=%d kcont=%d\n", ggml_is_contiguous(attn_q_norm), ggml_is_contiguous(attn_k_norm));
 
                     Qcur = llm_build_norm(ctx0, Qcur, hparams,
-                            model.layers[il].attn_q_norm, NULL,
-                            LLM_NORM, cb, il);
+                                attn_q_norm,
+                                NULL,
+                                LLM_NORM, cb, il);
                     cb(Qcur, "Qcur", il);
-                    /*
-                    struct ggml_tensor * tmpq = ggml_view_3d(
-                        ctx0, Qcur, n_embd_head_k, n_head, n_tokens,
-                        ggml_element_size(Qcur) * n_embd_head_k,
-                        ggml_element_size(Qcur) * n_embd_head_k * n_head,
-                        0);
-                    cb(tmpq, "tmpq", il);
-
-                    Qcur = llm_build_norm(ctx0, tmpq, hparams,
-                            model.layers[il].attn_q_norm, NULL,
-                            LLM_NORM, cb, il);
-                    cb(Qcur, "Qcur", il);
-                    */
-                }
-                if (model.layers[il].attn_k_norm) {
-                    Kcur = ggml_cont(ctx0, ggml_reshape_3d(ctx0, Kcur, n_embd_head_k, n_head_kv, n_tokens));
-                    cb(Kcur, "Kcur", il);
 
                     Kcur = llm_build_norm(ctx0, Kcur, hparams,
-                            model.layers[il].attn_k_norm, NULL,
+                            attn_k_norm,
+                            NULL,
                             LLM_NORM, cb, il);
                     cb(Kcur, "Kcur", il);
-                    /*
-                    struct ggml_tensor * tmpk = ggml_view_3d(
-                        ctx0, Kcur, n_embd_head_k, n_head_kv, n_tokens,
-                        ggml_element_size(Kcur) * n_embd_head_k,
-                        ggml_element_size(Kcur) * n_embd_head_k * n_head_kv,
-                        0);
-                    cb(tmpk, "tmpk", il);
-
-                    Kcur = llm_build_norm(ctx0, tmpk, hparams,
-                            model.layers[il].attn_k_norm, NULL,
-                            LLM_NORM, cb, il);
-                    cb(Kcur, "Kcur", il);
-                    */
                 }
 
                 Qcur = ggml_rope_custom(
@@ -13183,6 +13193,9 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
                 new_type = GGML_TYPE_IQ3_S;
             }
         }
+    // command-r+ HACK
+    } else if (name.find("q_norm") != std::string::npos || name.find("k_norm") != std::string::npos) {
+        new_type = GGML_TYPE_F16;
     } else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS || ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS || ftype == LLAMA_FTYPE_MOSTLY_IQ1_S ||
                ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M    || ftype == LLAMA_FTYPE_MOSTLY_IQ1_M) {
         if (name.find("attn_v.weight") != std::string::npos) {
