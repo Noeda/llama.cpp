@@ -5434,7 +5434,9 @@ static bool llm_load_tensors(
 
                         if (model.arch == LLM_ARCH_COMMAND_R_PLUS) {
                             layer.attn_q_norm = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k, n_head});
-                            layer.attn_k_norm = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k, n_head_kv});
+                            layer.attn_k_norm = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k, n_head});
+                            //layer.attn_q_norm = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd});
+                            //layer.attn_k_norm = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd});
                         }
 
                         layer.wq = ml.create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd});
@@ -9438,8 +9440,11 @@ struct llm_build_context {
         struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, LLAMA_MAX_NODES, false);
 
         const int64_t n_embd_head = hparams.n_embd_head_v;
-        GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
+        const int64_t n_embd_head_k = hparams.n_embd_head_k;
+        const int64_t n_head = hparams.n_head;
         const float f_logit_scale = hparams.f_logit_scale;
+
+        GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
 
         struct ggml_tensor * cur;
         struct ggml_tensor * inpL;
@@ -9486,13 +9491,25 @@ struct llm_build_context {
                 }
 
                 if (model.layers[il].attn_q_norm) {
-                    Qcur = llm_build_norm(ctx0, Qcur, hparams,
+                    struct ggml_tensor * tmpq = ggml_view_2d(
+                        ctx0, Qcur, n_embd_head_k, n_head,
+                        ggml_element_size(Qcur) * n_embd_head_k,
+                        ggml_element_size(Qcur) * n_embd_head_k * n_head);
+                    cb(tmpq, "tmpq", il);
+
+                    Qcur = llm_build_norm(ctx0, tmpq, hparams,
                             model.layers[il].attn_q_norm, NULL,
                             LLM_NORM, cb, il);
                     cb(Qcur, "Qcur", il);
                 }
                 if (model.layers[il].attn_k_norm) {
-                    Kcur = llm_build_norm(ctx0, Kcur, hparams,
+                    struct ggml_tensor * tmpk = ggml_view_2d(
+                        ctx0, Kcur, n_embd_head_k, n_head,
+                        ggml_element_size(Kcur) * n_embd_head_k,
+                        ggml_element_size(Kcur) * n_embd_head_k * n_head);
+                    cb(tmpk, "tmpk", il);
+
+                    Kcur = llm_build_norm(ctx0, tmpk, hparams,
                             model.layers[il].attn_k_norm, NULL,
                             LLM_NORM, cb, il);
                     cb(Kcur, "Kcur", il);
