@@ -9497,7 +9497,7 @@ struct llm_build_context {
                     cb(Qcur, "Qcur", il);
 
                     Qcur = llm_build_norm(ctx0, Qcur, hparams,
-                            model.layers[il].attn_v_norm, NULL,
+                            model.layers[il].attn_q_norm, NULL,
                             LLM_NORM, cb, il);
                     cb(Qcur, "Qcur", il);
                     /*
