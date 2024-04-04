@@ -9491,6 +9491,14 @@ struct llm_build_context {
                 }
 
                 if (model.layers[il].attn_q_norm) {
+                    Qcur = ggml_cont(ctx0, ggml_reshape_3d(ctx0, Qcur, n_embd_head_k, n_head, n_tokens));
+                    cb(Qcur, "Qcur", il);
+
+                    Qcur = llm_build_norm(ctx0, Qcur, hparams,
+                            model.layers[il].attn_v_norm, NULL,
+                            LLM_NORM, cb, il);
+                    cb(Qcur, "Qcur", il);
+                    /*
                     struct ggml_tensor * tmpq = ggml_view_3d(
                         ctx0, Qcur, n_embd_head_k, n_head, n_tokens,
                         ggml_element_size(Qcur) * n_embd_head_k,
@@ -9502,8 +9510,17 @@ struct llm_build_context {
                             model.layers[il].attn_q_norm, NULL,
                             LLM_NORM, cb, il);
                     cb(Qcur, "Qcur", il);
+                    */
                 }
                 if (model.layers[il].attn_k_norm) {
+                    Kcur = ggml_cont(ctx0, ggml_reshape_3d(ctx0, Kcur, n_embd_head_k, n_head_kv, n_tokens));
+                    cb(Kcur, "Kcur", il);
+
+                    Kcur = llm_build_norm(ctx0, Kcur, hparams,
+                            model.layers[il].attn_k_norm, NULL,
+                            LLM_NORM, cb, il);
+                    cb(Kcur, "Kcur", il);
+                    /*
                     struct ggml_tensor * tmpk = ggml_view_3d(
                         ctx0, Kcur, n_embd_head_k, n_head_kv, n_tokens,
                         ggml_element_size(Kcur) * n_embd_head_k,
@@ -9515,6 +9532,7 @@ struct llm_build_context {
                             model.layers[il].attn_k_norm, NULL,
                             LLM_NORM, cb, il);
                     cb(Kcur, "Kcur", il);
+                    */
                 }
 
                 Qcur = ggml_rope_custom(
@@ -10333,6 +10351,7 @@ static int llama_decode_internal(
         //printf("kv_self.n = %5d, kv_self.used = %5d, kv_self.head = %5d\n", kv_self.n, kv_self.used, kv_self.head);
 
         ggml_backend_sched_reset(lctx.sched);
+
         ggml_backend_sched_set_eval_callback(lctx.sched, lctx.cparams.cb_eval, lctx.cparams.cb_eval_user_data);
 
         ggml_cgraph * gf = llama_build_graph(lctx, u_batch, false);
