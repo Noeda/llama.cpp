@@ -9491,10 +9491,11 @@ struct llm_build_context {
                 }
 
                 if (model.layers[il].attn_q_norm) {
-                    struct ggml_tensor * tmpq = ggml_view_2d(
-                        ctx0, Qcur, n_embd_head_k, n_head,
+                    struct ggml_tensor * tmpq = ggml_view_3d(
+                        ctx0, Qcur, n_embd_head_k, n_head, n_tokens,
                         ggml_element_size(Qcur) * n_embd_head_k,
-                        ggml_element_size(Qcur) * n_embd_head_k * n_head);
+                        ggml_element_size(Qcur) * n_embd_head_k * n_head,
+                        0);
                     cb(tmpq, "tmpq", il);
 
                     Qcur = llm_build_norm(ctx0, tmpq, hparams,
@@ -9503,10 +9504,11 @@ struct llm_build_context {
                     cb(Qcur, "Qcur", il);
                 }
                 if (model.layers[il].attn_k_norm) {
-                    struct ggml_tensor * tmpk = ggml_view_2d(
-                        ctx0, Kcur, n_embd_head_k, n_head,
+                    struct ggml_tensor * tmpk = ggml_view_3d(
+                        ctx0, Kcur, n_embd_head_k, n_head_kv, n_tokens,
                         ggml_element_size(Kcur) * n_embd_head_k,
-                        ggml_element_size(Kcur) * n_embd_head_k * n_head);
+                        ggml_element_size(Kcur) * n_embd_head_k * n_head_kv,
+                        0);
                     cb(tmpk, "tmpk", il);
 
                     Kcur = llm_build_norm(ctx0, tmpk, hparams,
