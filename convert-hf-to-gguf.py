@@ -2340,11 +2340,26 @@ class CommandR2Model(Model):
     model_arch = gguf.MODEL_ARCH.COMMAND_R
 
     def __init__(self, *args, **kwargs):
+        # Hack: Command-R+ (not to be confused with Command-R) uses the same
+        # transformers class CohereForCausalLM, but has a new use_qk_norm
+        # parameter. We can use that to detect it and use the Command-R+ model
+        # arch instead.
+        dir_model = None
+        if 'dir_model' in kwargs:
+            dir_model = kwargs['dir_model']
+        else:
+            dir_model = args[0]
+        hparams = Model.load_hparams(dir_model)
+        if 'use_qk_norm' in hparams and hparams['use_qk_norm']:
+            self.model_arch = gguf.MODEL_ARCH.COMMAND_R_PLUS
+        del hparams
+
         super().__init__(*args, **kwargs)
 
         # max_position_embeddings = 8192 in config.json but model was actually
         # trained on 128k context length
-        self.hparams["max_position_embeddings"] = self.hparams["model_max_length"]
+        if 'model_max_length' in self.hparams:
+            self.hparams["max_position_embeddings"] = self.hparams["model_max_length"]
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -2422,6 +2437,8 @@ def main() -> None:
     with torch.inference_mode():
         model_class = Model.from_model_architecture(hparams["architectures"][0])
         model_instance = model_class(dir_model, ftype_map[args.outtype], fname_out, args.bigendian)
+
+        print(f"Model architecture: {model_instance.model_arch.name}")
 
         print("Set model parameters")
         model_instance.set_gguf_parameters()

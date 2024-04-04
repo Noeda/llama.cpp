@@ -97,34 +97,35 @@ class Keys:
 
 
 class MODEL_ARCH(IntEnum):
-    LLAMA      = auto()
-    FALCON     = auto()
-    BAICHUAN   = auto()
-    GROK       = auto()
-    GPT2       = auto()
-    GPTJ       = auto()
-    GPTNEOX    = auto()
-    MPT        = auto()
-    STARCODER  = auto()
-    PERSIMMON  = auto()
-    REFACT     = auto()
-    BERT       = auto()
-    NOMIC_BERT = auto()
-    BLOOM      = auto()
-    STABLELM   = auto()
-    QWEN       = auto()
-    QWEN2      = auto()
-    PHI2       = auto()
-    PLAMO      = auto()
-    CODESHELL  = auto()
-    ORION      = auto()
-    INTERNLM2  = auto()
-    MINICPM    = auto()
-    GEMMA      = auto()
-    STARCODER2 = auto()
-    MAMBA      = auto()
-    XVERSE     = auto()
-    COMMAND_R  = auto()
+    LLAMA           = auto()
+    FALCON          = auto()
+    BAICHUAN        = auto()
+    GROK            = auto()
+    GPT2            = auto()
+    GPTJ            = auto()
+    GPTNEOX         = auto()
+    MPT             = auto()
+    STARCODER       = auto()
+    PERSIMMON       = auto()
+    REFACT          = auto()
+    BERT            = auto()
+    NOMIC_BERT      = auto()
+    BLOOM           = auto()
+    STABLELM        = auto()
+    QWEN            = auto()
+    QWEN2           = auto()
+    PHI2            = auto()
+    PLAMO           = auto()
+    CODESHELL       = auto()
+    ORION           = auto()
+    INTERNLM2       = auto()
+    MINICPM         = auto()
+    GEMMA           = auto()
+    STARCODER2      = auto()
+    MAMBA           = auto()
+    XVERSE          = auto()
+    COMMAND_R       = auto()
+    COMMAND_R_PLUS  = auto()
 
 
 class MODEL_TENSOR(IntEnum):
@@ -194,6 +195,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.MAMBA:          "mamba",
     MODEL_ARCH.XVERSE:         "xverse",
     MODEL_ARCH.COMMAND_R:      "command-r",
+    MODEL_ARCH.COMMAND_R_PLUS: "command-r-plus",
 }
 
 TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
@@ -631,6 +633,20 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+    ],
+    MODEL_ARCH.COMMAND_R_PLUS: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K_NORM,
         MODEL_TENSOR.ATTN_Q,
         MODEL_TENSOR.ATTN_K,
         MODEL_TENSOR.ATTN_V,

@@ -220,39 +220,41 @@ enum llm_arch {
     LLM_ARCH_MAMBA,
     LLM_ARCH_XVERSE,
     LLM_ARCH_COMMAND_R,
+    LLM_ARCH_COMMAND_R_PLUS,
     LLM_ARCH_UNKNOWN,
 };
 
 static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
-    { LLM_ARCH_LLAMA,           "llama"      },
-    { LLM_ARCH_FALCON,          "falcon"     },
-    { LLM_ARCH_GROK,            "grok"       },
-    { LLM_ARCH_GPT2,            "gpt2"       },
-    { LLM_ARCH_GPTJ,            "gptj"       },
-    { LLM_ARCH_GPTNEOX,         "gptneox"    },
-    { LLM_ARCH_MPT,             "mpt"        },
-    { LLM_ARCH_BAICHUAN,        "baichuan"   },
-    { LLM_ARCH_STARCODER,       "starcoder"  },
-    { LLM_ARCH_PERSIMMON,       "persimmon"  },
-    { LLM_ARCH_REFACT,          "refact"     },
-    { LLM_ARCH_BERT,            "bert"       },
-    { LLM_ARCH_NOMIC_BERT,      "nomic-bert" },
-    { LLM_ARCH_BLOOM,           "bloom"      },
-    { LLM_ARCH_STABLELM,        "stablelm"   },
-    { LLM_ARCH_QWEN,            "qwen"       },
-    { LLM_ARCH_QWEN2,           "qwen2"      },
-    { LLM_ARCH_PHI2,            "phi2"       },
-    { LLM_ARCH_PLAMO,           "plamo"      },
-    { LLM_ARCH_CODESHELL,       "codeshell"  },
-    { LLM_ARCH_ORION,           "orion"      },
-    { LLM_ARCH_INTERNLM2,       "internlm2"  },
-    { LLM_ARCH_MINICPM,         "minicpm"    },
-    { LLM_ARCH_GEMMA,           "gemma"      },
-    { LLM_ARCH_STARCODER2,      "starcoder2" },
-    { LLM_ARCH_MAMBA,           "mamba"      },
-    { LLM_ARCH_XVERSE,          "xverse"     },
-    { LLM_ARCH_COMMAND_R,       "command-r"  },
-    { LLM_ARCH_UNKNOWN,         "(unknown)"  },
+    { LLM_ARCH_LLAMA,           "llama"           },
+    { LLM_ARCH_FALCON,          "falcon"          },
+    { LLM_ARCH_GROK,            "grok"            },
+    { LLM_ARCH_GPT2,            "gpt2"            },
+    { LLM_ARCH_GPTJ,            "gptj"            },
+    { LLM_ARCH_GPTNEOX,         "gptneox"         },
+    { LLM_ARCH_MPT,             "mpt"             },
+    { LLM_ARCH_BAICHUAN,        "baichuan"        },
+    { LLM_ARCH_STARCODER,       "starcoder"       },
+    { LLM_ARCH_PERSIMMON,       "persimmon"       },
+    { LLM_ARCH_REFACT,          "refact"          },
+    { LLM_ARCH_BERT,            "bert"            },
+    { LLM_ARCH_NOMIC_BERT,      "nomic-bert"      },
+    { LLM_ARCH_BLOOM,           "bloom"           },
+    { LLM_ARCH_STABLELM,        "stablelm"        },
+    { LLM_ARCH_QWEN,            "qwen"            },
+    { LLM_ARCH_QWEN2,           "qwen2"           },
+    { LLM_ARCH_PHI2,            "phi2"            },
+    { LLM_ARCH_PLAMO,           "plamo"           },
+    { LLM_ARCH_CODESHELL,       "codeshell"       },
+    { LLM_ARCH_ORION,           "orion"           },
+    { LLM_ARCH_INTERNLM2,       "internlm2"       },
+    { LLM_ARCH_MINICPM,         "minicpm"         },
+    { LLM_ARCH_GEMMA,           "gemma"           },
+    { LLM_ARCH_STARCODER2,      "starcoder2"      },
+    { LLM_ARCH_MAMBA,           "mamba"           },
+    { LLM_ARCH_XVERSE,          "xverse"          },
+    { LLM_ARCH_COMMAND_R,       "command-r"       },
+    { LLM_ARCH_COMMAND_R_PLUS,  "command-r-plus"  },
+    { LLM_ARCH_UNKNOWN,         "(unknown)"       },
 };
 
 enum llm_kv {
@@ -917,6 +919,23 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
             { LLM_TENSOR_OUTPUT_NORM,     "output_norm" },
             { LLM_TENSOR_ATTN_NORM,       "blk.%d.attn_norm" },
+            { LLM_TENSOR_ATTN_Q,          "blk.%d.attn_q" },
+            { LLM_TENSOR_ATTN_K,          "blk.%d.attn_k" },
+            { LLM_TENSOR_ATTN_V,          "blk.%d.attn_v" },
+            { LLM_TENSOR_ATTN_OUT,        "blk.%d.attn_output" },
+            { LLM_TENSOR_FFN_GATE,        "blk.%d.ffn_gate" },
+            { LLM_TENSOR_FFN_DOWN,        "blk.%d.ffn_down" },
+            { LLM_TENSOR_FFN_UP,          "blk.%d.ffn_up" },
+        },
+    },
+    {
+        LLM_ARCH_COMMAND_R_PLUS,
+        {
+            { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
+            { LLM_TENSOR_OUTPUT_NORM,     "output_norm" },
+            { LLM_TENSOR_ATTN_NORM,       "blk.%d.attn_norm" },
+            { LLM_TENSOR_ATTN_Q_NORM,     "blk.%d.attn_q_norm"},
+            { LLM_TENSOR_ATTN_K_NORM,     "blk.%d.attn_k_norm"},
             { LLM_TENSOR_ATTN_Q,          "blk.%d.attn_q" },
             { LLM_TENSOR_ATTN_K,          "blk.%d.attn_k" },
             { LLM_TENSOR_ATTN_V,          "blk.%d.attn_v" },
@@ -1692,6 +1711,7 @@ enum e_model {
     MODEL_40B,
     MODEL_65B,
     MODEL_70B,
+    MODEL_104B,
     MODEL_314B,
     MODEL_SMALL,
     MODEL_MEDIUM,
@@ -3543,6 +3563,7 @@ static const char * llama_model_type_name(e_model type) {
         case MODEL_40B:    return "40B";
         case MODEL_65B:    return "65B";
         case MODEL_70B:    return "70B";
+        case MODEL_104B:   return "104B";
         case MODEL_314B:   return "314B";
         case MODEL_SMALL:  return "0.1B";
         case MODEL_MEDIUM: return "0.4B";
@@ -3953,11 +3974,13 @@ static void llm_load_hparams(
                 }
             } break;
         case LLM_ARCH_COMMAND_R:
+        case LLM_ARCH_COMMAND_R_PLUS:
             {
                 ml.get_key(LLM_KV_LOGIT_SCALE, hparams.f_logit_scale);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
                 switch (hparams.n_layer) {
                     case 40: model.type = e_model::MODEL_35B; break;
+                    case 64: model.type = e_model::MODEL_104B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
@@ -5384,6 +5407,7 @@ static bool llm_load_tensors(
                     }
                 } break;
             case LLM_ARCH_COMMAND_R:
+            case LLM_ARCH_COMMAND_R_PLUS:
                 {
                     model.tok_embd = ml.create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
 
@@ -5403,6 +5427,11 @@ static bool llm_load_tensors(
                         auto & layer = model.layers[i];
 
                         layer.attn_norm = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
+
+                        if (model.arch == LLM_ARCH_COMMAND_R_PLUS) {
+                            layer.attn_q_norm = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd});
+                            layer.attn_k_norm = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd});
+                        }
 
                         layer.wq = ml.create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd});
                         layer.wk = ml.create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa});
@@ -9452,6 +9481,19 @@ struct llm_build_context {
                     cb(Vcur, "Vcur", il);
                 }
 
+                if (model.layers[il].attn_q_norm) {
+                    Qcur = llm_build_norm(ctx0, Qcur, hparams,
+                            model.layers[il].attn_q_norm, NULL,
+                            LLM_NORM, cb, il);
+                    cb(Qcur, "Qcur", il);
+                }
+                if (model.layers[il].attn_k_norm) {
+                    Kcur = llm_build_norm(ctx0, Kcur, hparams,
+                            model.layers[il].attn_k_norm, NULL,
+                            LLM_NORM, cb, il);
+                    cb(Kcur, "Kcur", il);
+                }
+
                 Qcur = ggml_rope_custom(
                     ctx0, ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens), inp_pos,
                     n_rot, rope_type, 0, n_orig_ctx, freq_base, freq_scale,
@@ -9716,6 +9758,7 @@ static struct ggml_cgraph * llama_build_graph(
                 result = llm.build_xverse();
             } break;
         case LLM_ARCH_COMMAND_R:
+        case LLM_ARCH_COMMAND_R_PLUS:
             {
                 result = llm.build_command_r();
             } break;
@@ -14525,6 +14568,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_MINICPM:
         case LLM_ARCH_XVERSE:
         case LLM_ARCH_COMMAND_R:
+        case LLM_ARCH_COMMAND_R_PLUS:
             return LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2
