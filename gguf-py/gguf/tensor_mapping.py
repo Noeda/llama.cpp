@@ -286,14 +286,14 @@ class TensorNameMap:
             "language_model.encoder.layers.{bid}.self_attention.q_layernorm",
             "model.layers.{bid}.self_attn.q_layernorm",                       # persimmon
             "transformer.blocks.{bid}.attn.q_ln",                             # sea-lion
-            "model.layers.{bid}.self_attn.q_norm.weight",                     # command-r+
+            "model.layers.{bid}.self_attn.q_norm",                            # command-r+
         ),
 
         MODEL_TENSOR.ATTN_K_NORM: (
             "language_model.encoder.layers.{bid}.self_attention.k_layernorm",
             "model.layers.{bid}.self_attn.k_layernorm",                       # persimmon
             "transformer.blocks.{bid}.attn.k_ln",                             # sea-lion
-            "model.layers.{bid}.self_attn.k_norm.weight",                     # command-r+
+            "model.layers.{bid}.self_attn.k_norm",                            # command-r+
         ),
 
         MODEL_TENSOR.ROPE_FREQS: (
