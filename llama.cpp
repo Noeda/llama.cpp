@@ -9438,7 +9438,6 @@ struct llm_build_context {
         struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, LLAMA_MAX_NODES, false);
 
         const int64_t n_embd_head = hparams.n_embd_head_v;
-        const int64_t n_embd_head_k = hparams.n_embd_head_k;
         const int64_t n_head = hparams.n_head;
         const float f_logit_scale = hparams.f_logit_scale;
 
@@ -9490,11 +9489,15 @@ struct llm_build_context {
 
                 if (model.layers[il].attn_q_norm)
                 {
+                    // Noeda hacks; TODO: remove everything extra you don't
+                    // actually need. If you see this comment in a PR then
+                    // someone forgot to clean up the hacks.
                     struct ggml_tensor * attn_q_norm = model.layers[il].attn_q_norm;
                     cb(attn_q_norm, "attn_q_norm", il);
                     struct ggml_tensor * attn_k_norm = model.layers[il].attn_k_norm;
                     cb(attn_k_norm, "attn_k_norm", il);
 
+                    // CPU did not like F16, so cast to F32
                     attn_q_norm = ggml_cast(ctx0, attn_q_norm, GGML_TYPE_F32);
                     cb(attn_q_norm, "attn_q_norm_cast_F32", il);
                     attn_k_norm = ggml_cast(ctx0, attn_k_norm, GGML_TYPE_F32);
