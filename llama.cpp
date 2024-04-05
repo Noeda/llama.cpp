@@ -9490,9 +9490,9 @@ struct llm_build_context {
 
                 if (model.layers[il].attn_q_norm)
                 {
-                    struct ggml_tensor * attn_q_norm = ggml_cont(ctx0, ggml_transpose(ctx0, model.layers[il].attn_q_norm));
+                    struct ggml_tensor * attn_q_norm = model.layers[il].attn_q_norm;
                     cb(attn_q_norm, "attn_q_norm", il);
-                    struct ggml_tensor * attn_k_norm = ggml_cont(ctx0, ggml_transpose(ctx0, model.layers[il].attn_k_norm));
+                    struct ggml_tensor * attn_k_norm = model.layers[il].attn_k_norm;
                     cb(attn_k_norm, "attn_k_norm", il);
 
                     attn_q_norm = ggml_cast(ctx0, attn_q_norm, GGML_TYPE_F32);
@@ -9504,7 +9504,6 @@ struct llm_build_context {
                     cb(Qcur, "Qcur", il);
                     Kcur = ggml_cont(ctx0, ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens));
                     cb(Kcur, "Kcur", il);
-
 
                     Qcur = llm_build_norm(ctx0, Qcur, hparams,
                                 attn_q_norm,
