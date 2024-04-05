@@ -1652,22 +1652,6 @@ static ggml_type kv_cache_type_from_str(const std::string & s) {
     throw std::runtime_error("Invalid cache type: " + s);
 }
 
-static bool debug_print(struct ggml_tensor * t, bool ask, void * user_data)
-{
-    /*
-    fprintf(stderr, "tensor: %p (%s)\n", t, ggml_get_name(t));
-    for (int i = 0; i < 5; i++) {
-        fprintf(stderr, "%g ", ggml_get_f32_1d(t, i));
-    }
-    fprintf(stderr, " ... ");
-    for (int i = ggml_nelements(t) - 5; i < ggml_nelements(t); i++) {
-        fprintf(stderr, "%g ", ggml_get_f32_1d(t, i));
-    }
-    fprintf(stderr, "\n");
-    */
-    return true;
-}
-
 struct llama_context_params llama_context_params_from_gpt_params(const gpt_params & params) {
     auto cparams = llama_context_default_params();
 
@@ -1694,8 +1678,6 @@ struct llama_context_params llama_context_params_from_gpt_params(const gpt_param
 
     cparams.type_k = kv_cache_type_from_str(params.cache_type_k);
     cparams.type_v = kv_cache_type_from_str(params.cache_type_v);
-
-    cparams.cb_eval = debug_print;
 
     return cparams;
 }
