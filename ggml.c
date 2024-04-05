@@ -10239,9 +10239,6 @@ static void ggml_compute_forward_norm_f32(
 
     const struct ggml_tensor * src0 = dst->src[0];
 
-    static int counter = 0;
-    counter += 1;
-
     GGML_ASSERT(ggml_are_same_shape(src0, dst));
 
     if (params->type == GGML_TASK_TYPE_INIT || params->type == GGML_TASK_TYPE_FINALIZE) {
@@ -10259,25 +10256,6 @@ static void ggml_compute_forward_norm_f32(
     memcpy(&eps, dst->op_params, sizeof(float));
 
     GGML_ASSERT(eps > 0.0f);
-
-    /*
-    if (src0->ne[0] < 10000) {
-        int nonempty = 0;
-        for (long i = 0; i < ggml_nelements(src0); i++) {
-            if (ggml_get_f32_1d(src0, i) != 0.0) {
-                printf("src val: %ld %g\n", i, ggml_get_f32_1d(src0, i));
-                nonempty = 1;
-            }
-        }
-        if ((counter % 100 == 0) || nonempty) {
-            printf("nonempty %d src dims: %d %d %d %d\n", nonempty, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3]);
-        }
-        if (nonempty) {
-            abort();
-        }
-    }
-    */
-
 
     // TODO: optimize
     for (int64_t i03 = 0; i03 < ne03; i03++) {
