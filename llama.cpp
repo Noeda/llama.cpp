@@ -9493,9 +9493,7 @@ struct llm_build_context {
                     // actually need. If you see this comment in a PR then
                     // someone forgot to clean up the hacks.
                     struct ggml_tensor * attn_q_norm = model.layers[il].attn_q_norm;
-                    cb(attn_q_norm, "attn_q_norm", il);
                     struct ggml_tensor * attn_k_norm = model.layers[il].attn_k_norm;
-                    cb(attn_k_norm, "attn_k_norm", il);
 
                     // CPU did not like F16, so cast to F32
                     attn_q_norm = ggml_cast(ctx0, attn_q_norm, GGML_TYPE_F32);
@@ -9503,9 +9501,15 @@ struct llm_build_context {
                     attn_k_norm = ggml_cast(ctx0, attn_k_norm, GGML_TYPE_F32);
                     cb(attn_k_norm, "attn_k_norm_cast_F32", il);
 
-                    Qcur = ggml_cont(ctx0, ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens));
+                    Qcur = ggml_view_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens,
+                                ggml_element_size(Qcur) * n_embd_head,
+                                ggml_element_size(Qcur) * n_embd_head * n_head,
+                                0);
                     cb(Qcur, "Qcur", il);
-                    Kcur = ggml_cont(ctx0, ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens));
+                    Kcur = ggml_view_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens,
+                                ggml_element_size(Kcur) * n_embd_head,
+                                ggml_element_size(Kcur) * n_embd_head * n_head_kv,
+                                0);
                     cb(Kcur, "Kcur", il);
 
                     Qcur = llm_build_norm(ctx0, Qcur, hparams,
@@ -9526,14 +9530,14 @@ struct llm_build_context {
                     n_rot, rope_type, 0, n_orig_ctx, freq_base, freq_scale,
                     ext_factor, attn_factor, beta_fast, beta_slow
                 );
-                cb(Qcur, "Qcur-rope-reshape3d", il);
+                cb(Qcur, "Qcur", il);
 
                 Kcur = ggml_rope_custom(
                     ctx0, ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens), inp_pos,
                     n_rot, rope_type, 0, n_orig_ctx, freq_base, freq_scale,
                     ext_factor, attn_factor, beta_fast, beta_slow
                 );
-                cb(Kcur, "Kcur-rope-reshape3d", il);
+                cb(Kcur, "Kcur", il);
 
                 cur = llm_build_kv(ctx0, model, hparams, kv_self, gf,
                         model.layers[il].wo, model.layers[il].bo,
