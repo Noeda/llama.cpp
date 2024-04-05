@@ -9494,9 +9494,9 @@ struct llm_build_context {
 
                 if (model.layers[il].attn_q_norm)
                 {
-                    struct ggml_tensor * attn_q_norm = ggml_transpose(ctx0, model.layers[il].attn_q_norm);
+                    struct ggml_tensor * attn_q_norm = ggml_cont(ctx0, ggml_transpose(ctx0, model.layers[il].attn_q_norm));
                     cb(attn_q_norm, "attn_q_norm", il);
-                    struct ggml_tensor * attn_k_norm = ggml_transpose(ctx0, model.layers[il].attn_k_norm);
+                    struct ggml_tensor * attn_k_norm = ggml_cont(ctx0, ggml_transpose(ctx0, model.layers[il].attn_k_norm));
                     cb(attn_k_norm, "attn_k_norm", il);
 
                     attn_q_norm = ggml_cast(ctx0, attn_q_norm, GGML_TYPE_F32);
@@ -9561,10 +9561,10 @@ struct llm_build_context {
                             LLM_NORM, cb, il);
                     cb(Kcur, "Kcur-normed", il);
 
-                    Qcur = ggml_cont(ctx0, ggml_transpose(ctx0, Qcur));
-                    cb(Qcur, "Qcur-transpose-cont", il);
-                    Kcur = ggml_cont(ctx0, ggml_transpose(ctx0, Kcur));
-                    cb(Kcur, "Kcur-transpose-cont", il);
+                    //Qcur = ggml_cont(ctx0, ggml_transpose(ctx0, Qcur));
+                    //cb(Qcur, "Qcur-transpose-cont", il);
+                    //Kcur = ggml_cont(ctx0, ggml_transpose(ctx0, Kcur));
+                    //cb(Kcur, "Kcur-transpose-cont", il);
                 }
 
                 Qcur = ggml_rope_custom(
