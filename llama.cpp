@@ -13179,9 +13179,15 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
         return std::make_pair(i_layer, n_layer);
     };
 
+    // Command-R+ has such a large embedding weight tensor it overflows
+    // 32-bit signed integers. This is band-aid until quants can deal with
+    // that.
+    if (name == "token_embd.weight" && arch == LLM_ARCH_COMMAND_R_PLUS) {
+        new_type = GGML_TYPE_F16;
+    }
     // for arches that share the same tensor between the token embeddings and the output, we quantize the token embeddings
     // with the quantization of the output tensor
-    if (name == tn(LLM_TENSOR_OUTPUT, "weight") || (!qs.has_output && name == tn(LLM_TENSOR_TOKEN_EMBD, "weight"))) {
+    else if (name == tn(LLM_TENSOR_OUTPUT, "weight") || (!qs.has_output && name == tn(LLM_TENSOR_TOKEN_EMBD, "weight"))) {
         if (qs.params->output_tensor_type < GGML_TYPE_COUNT) {
             new_type = qs.params->output_tensor_type;
         } else {
@@ -13213,8 +13219,10 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
                 new_type = GGML_TYPE_IQ3_S;
             }
         }
-    // command-r+ HACK
-    } else if (name.find("q_norm") != std::string::npos || name.find("k_norm") != std::string::npos) {
+    } else if ((arch == LLM_ARCH_COMMAND_R ||
+                arch == LLM_ARCH_COMMAND_R_PLUS) &&
+               (name.find("q_norm") != std::string::npos ||
+                name.find("k_norm") != std::string::npos)) {
         new_type = GGML_TYPE_F32;
     } else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS || ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS || ftype == LLAMA_FTYPE_MOSTLY_IQ1_S ||
                ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M    || ftype == LLAMA_FTYPE_MOSTLY_IQ1_M) {

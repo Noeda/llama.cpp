@@ -20357,10 +20357,17 @@ size_t ggml_quantize_chunk(
                    int   nrows,
                    int   n_per_row,
            const float * imatrix) {
-    const int n = nrows * n_per_row;
+    const size_t n = (size_t) nrows * n_per_row;
 
     if (ggml_quantize_requires_imatrix(type)) {
         GGML_ASSERT(imatrix != NULL);
+    }
+
+    // TODO: remove when we know we handle tensors bigger than 2**31-1
+    // properly. A lot of quant code uses 'int's to count rather than
+    // size_t or int64_t etc.
+    if (n > INT_MAX) {
+        fprintf(stderr, "warning: a tensor has more than 2**31-1 elements: %ld this can cause silent corruption.\n", (long int) n);
     }
 
     GGML_ASSERT(start % type_traits[type].blck_size == 0);
