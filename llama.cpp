@@ -5433,8 +5433,8 @@ static bool llm_load_tensors(
                         layer.attn_norm = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
 
                         if (model.arch == LLM_ARCH_COMMAND_R_PLUS) {
-                            layer.attn_q_norm = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_head, n_embd_head_k});
-                            layer.attn_k_norm = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_head_kv, n_embd_head_k});
+                            layer.attn_q_norm = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_head, n_embd_head_k}); // , n_head});
+                            layer.attn_k_norm = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_head_kv, n_embd_head_k}); // , n_head_kv});
                             //layer.attn_q_norm = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k, n_head});
                             //layer.attn_k_norm = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k, n_head_kv});
                             //layer.attn_q_norm = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd});
@@ -9472,38 +9472,47 @@ struct llm_build_context {
             {
                 // compute Q and K and RoPE them
                 struct ggml_tensor * Qcur = ggml_mul_mat(ctx0, model.layers[il].wq, cur);
-                cb(Qcur, "Qcur", il);
+                cb(Qcur, "Qcur-first", il);
                 if (model.layers[il].bq) {
                     Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
                     cb(Qcur, "Qcur", il);
                 }
 
                 struct ggml_tensor * Kcur = ggml_mul_mat(ctx0, model.layers[il].wk, cur);
-                cb(Kcur, "Kcur", il);
+                cb(Kcur, "Kcur-first", il);
                 if (model.layers[il].bk) {
                     Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
                     cb(Kcur, "Kcur", il);
                 }
 
                 struct ggml_tensor * Vcur = ggml_mul_mat(ctx0, model.layers[il].wv, cur);
-                cb(Vcur, "Vcur", il);
+                cb(Vcur, "Vcur-first", il);
                 if (model.layers[il].bv) {
                     Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
                     cb(Vcur, "Vcur", il);
                 }
 
-                if(model.layers[il].attn_q_norm)
+                if (model.layers[il].attn_q_norm)
                 {
-                    struct ggml_tensor * attn_q_norm = ggml_cont(ctx0, ggml_transpose(ctx0, model.layers[il].attn_q_norm));
-                    struct ggml_tensor * attn_k_norm = ggml_cont(ctx0, ggml_transpose(ctx0, model.layers[il].attn_k_norm));
+                    struct ggml_tensor * attn_q_norm = ggml_transpose(ctx0, model.layers[il].attn_q_norm);
+                    cb(attn_q_norm, "attn_q_norm", il);
+                    struct ggml_tensor * attn_k_norm = ggml_transpose(ctx0, model.layers[il].attn_k_norm);
+                    cb(attn_k_norm, "attn_k_norm", il);
+
+                    attn_q_norm = ggml_cast(ctx0, attn_q_norm, GGML_TYPE_F32);
+                    cb(attn_q_norm, "attn_q_norm_cast_F32", il);
+                    attn_k_norm = ggml_cast(ctx0, attn_k_norm, GGML_TYPE_F32);
+                    cb(attn_k_norm, "attn_k_norm_cast_F32", il);
+
+                    //printf("%d %d %d %d\n", attn_q_norm->ne[0], attn_q_norm->ne[1], attn_q_norm->ne[2], attn_q_norm->ne[3]);
 
                     /*
                     if (model.layers[il].attn_q_norm) {
                         struct ggml_tensor * q = model.layers[il].attn_q_norm;
                         printf("%g %g %g %g %g\n", ggml_get_f32_1d(q, 0), ggml_get_f32_1d(q, 1), ggml_get_f32_1d(q, 2), ggml_get_f32_1d(q, 3), ggml_get_f32_1d(q, 4));
                     }
-                    abort();
                     */
+                    //abort();
 
                     /*
                     printf("Qcur dims: %d %d %d %d\n", Qcur->ne[0], Qcur->ne[1], Qcur->ne[2], Qcur->ne[3]);
@@ -9515,19 +9524,25 @@ struct llm_build_context {
                     printf("n_tokens: %d\n", n_tokens);
                     printf("after\n");
                     */
+                    Qcur = ggml_cont(ctx0, ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens));
+                            //ggml_element_size(Qcur) * n_embd_head,
+                            //ggml_element_size(Qcur) * n_embd_head * n_head,
+                            //0));
+                    cb(Qcur, "Qcur", il);
+                    Kcur = ggml_cont(ctx0, ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens));
+                            //ggml_element_size(Kcur) * n_embd_head,
+                            //ggml_element_size(Kcur) * n_embd_head * n_head_kv,
+                            //0));
+                    cb(Kcur, "Kcur", il);
 
-                    Qcur = ggml_cont(ctx0, ggml_view_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens,
-                            ggml_element_size(Qcur) * n_embd_head,
-                            ggml_element_size(Qcur) * n_embd_head * n_head,
-                            0));
-                    Kcur = ggml_cont(ctx0, ggml_view_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens,
-                            ggml_element_size(Kcur) * n_embd_head,
-                            ggml_element_size(Kcur) * n_embd_head * n_head_kv,
-                            0));
+                    //Qcur = ggml_cont(ctx0, ggml_transpose(ctx0, Qcur));
+                    //cb(Qcur, "Qcur", il);
+                    //Kcur = ggml_cont(ctx0, ggml_transpose(ctx0, Kcur));
+                    //cb(Kcur, "Kcur", il);
 
-                    printf("Qcur dims: %d %d %d %d\n", Qcur->ne[0], Qcur->ne[1], Qcur->ne[2], Qcur->ne[3]);
-                    printf("Kcur dims: %d %d %d %d\n", Kcur->ne[0], Kcur->ne[1], Kcur->ne[2], Kcur->ne[3]);
-                    printf("---\n");
+//                    printf("Qcur dims: %d %d %d %d\n", Qcur->ne[0], Qcur->ne[1], Qcur->ne[2], Qcur->ne[3]);
+ //                   printf("Kcur dims: %d %d %d %d\n", Kcur->ne[0], Kcur->ne[1], Kcur->ne[2], Kcur->ne[3]);
+  //                  printf("---\n");
                     //printf("Kcur dims: %d %d %d %d\n", Kcur->ne[0], Kcur->ne[1], Kcur->ne[2], Kcur->ne[3]);
                     //printf("attn_q_norm dims: %d %d %d %d\n", attn_q_norm->ne[0], attn_q_norm->ne[1], attn_q_norm->ne[2], attn_q_norm->ne[3]);
                     //printf("attn_k_norm dims: %d %d %d %d\n", attn_k_norm->ne[0], attn_k_norm->ne[1], attn_k_norm->ne[2], attn_k_norm->ne[3]);
@@ -9538,13 +9553,18 @@ struct llm_build_context {
                                 attn_q_norm,
                                 NULL,
                                 LLM_NORM, cb, il);
-                    cb(Qcur, "Qcur", il);
+                    cb(Qcur, "Qcur-normed", il);
 
                     Kcur = llm_build_norm(ctx0, Kcur, hparams,
                             attn_k_norm,
                             NULL,
                             LLM_NORM, cb, il);
-                    cb(Kcur, "Kcur", il);
+                    cb(Kcur, "Kcur-normed", il);
+
+                    Qcur = ggml_cont(ctx0, ggml_transpose(ctx0, Qcur));
+                    cb(Qcur, "Qcur-transpose-cont", il);
+                    Kcur = ggml_cont(ctx0, ggml_transpose(ctx0, Kcur));
+                    cb(Kcur, "Kcur-transpose-cont", il);
                 }
 
                 Qcur = ggml_rope_custom(
@@ -9552,14 +9572,14 @@ struct llm_build_context {
                     n_rot, rope_type, 0, n_orig_ctx, freq_base, freq_scale,
                     ext_factor, attn_factor, beta_fast, beta_slow
                 );
-                cb(Qcur, "Qcur", il);
+                cb(Qcur, "Qcur-rope-reshape3d", il);
 
                 Kcur = ggml_rope_custom(
                     ctx0, ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens), inp_pos,
                     n_rot, rope_type, 0, n_orig_ctx, freq_base, freq_scale,
                     ext_factor, attn_factor, beta_fast, beta_slow
                 );
-                cb(Kcur, "Kcur", il);
+                cb(Kcur, "Kcur-rope-reshape3d", il);
 
                 cur = llm_build_kv(ctx0, model, hparams, kv_self, gf,
                         model.layers[il].wo, model.layers[il].bo,
@@ -13195,7 +13215,7 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
         }
     // command-r+ HACK
     } else if (name.find("q_norm") != std::string::npos || name.find("k_norm") != std::string::npos) {
-        new_type = GGML_TYPE_F16;
+        new_type = GGML_TYPE_F32;
     } else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS || ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS || ftype == LLAMA_FTYPE_MOSTLY_IQ1_S ||
                ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M    || ftype == LLAMA_FTYPE_MOSTLY_IQ1_M) {
         if (name.find("attn_v.weight") != std::string::npos) {
