@@ -5973,12 +5973,10 @@ static struct ggml_tensor * llama_build_mat_mul_blocked_computation(
 
                 cb(b_slice, "b_slice", il);
 
-                struct ggml_tensor * result_slice = result_blocks[i * nb_B + j];
-
                 struct ggml_tensor * mm_result = ggml_mul_mat(ctx, a_slice, b_slice);
                 cb(mm_result, "mm_result", il);
 
-                result_blocks[i * nb_B + j] = ggml_add(ctx, result_slice, mm_result);
+                result_blocks[i * nb_B + j] = ggml_add_inplace(ctx, result_blocks[i * nb_B + j], mm_result);
                 cb(result_blocks[i * nb_B + j], "result_slice", il);
             }
         }
