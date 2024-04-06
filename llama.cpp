@@ -5793,7 +5793,6 @@ static struct ggml_tensor * llama_build_mat_mul_blocked_computation(
     struct     ggml_context * ctx,
     struct     ggml_tensor  * a,
     struct     ggml_tensor  * b,
-    const llama_model       & model,
     const     llm_build_cb  & cb,
     int64_t                   il,
     size_t                    forced_block_size)
@@ -5935,12 +5934,9 @@ static struct ggml_tensor * llama_build_mat_mul_blocked_computation(
         }
     }
 
-    size_t num_blocks = 0;
     for (size_t i = 0; i < nb_A; ++i) {
         for (size_t j = 0; j < nb_B; ++j) {
             for (size_t k = 0; k < nb_A2; ++k) {
-                num_blocks++;
-
                 const size_t i_min = i * block_size;
                 const size_t j_min = j * block_size;
                 const size_t k_min = k * block_size;
@@ -5960,18 +5956,10 @@ static struct ggml_tensor * llama_build_mat_mul_blocked_computation(
                 GGML_ASSERT(k_min * type_size_a % blck_size_a == 0);
                 GGML_ASSERT(k_min * type_size_b % blck_size_b == 0);
 
-                // blck_size=32
-                // type_size_a=19
-                //
-                // k_min = 4
-                //
-                // byte_offset = (type_size_a * (k_min/blck_size)) =
-                //                    19       *   (4/32) = 2
-
                 struct ggml_tensor * a_slice = ggml_view_2d(
                         ctx, a,
-                        k_max - k_min,   // k:k_max size
-                        i_max - i_min,   // i:i_max size
+                        k_max - k_min,
+                        i_max - i_min,
                         ggml_row_size(a->type, a->ne[0]),
                         ggml_row_size(a->type, a->ne[0]) * i_min + k_min * type_size_a / blck_size_a);
 
@@ -5979,8 +5967,8 @@ static struct ggml_tensor * llama_build_mat_mul_blocked_computation(
 
                 struct ggml_tensor * b_slice = ggml_view_2d(
                         ctx, b,
-                        k_max - k_min,   // k:k_max size
-                        j_max - j_min,   // j:j_max size
+                        k_max - k_min,
+                        j_max - j_min,
                         ggml_row_size(b->type, b->ne[0]),
                         ggml_row_size(b->type, b->ne[0]) * j_min + k_min * type_size_b / blck_size_b);
 
@@ -6033,7 +6021,6 @@ static struct ggml_tensor * llama_build_mat_mul_blocked_computation(
     }
 
     struct ggml_tensor * result_final = nullptr;
-    const ggml_type wanted_final_type = a->type;
 
     // TODO: looks like concat also wants f32, so everything is casted to
     // f32 here.. A datatype-agnostic concat would be nice; or ability to
@@ -9917,7 +9904,7 @@ struct llm_build_context {
 
         // lm_head
         //cur = ggml_mul_mat(ctx0, model.output, cur);
-        cur = llama_build_mat_mul_blocked_computation(ctx0, model.output, cur, model, cb, -1, 0);
+        cur = llama_build_mat_mul_blocked_computation(ctx0, model.output, cur, cb, -1, 0);
         if (f_logit_scale) {
             cur = ggml_scale(ctx0, cur, f_logit_scale);
         }
