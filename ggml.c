@@ -3238,6 +3238,10 @@ void ggml_unravel_index(const struct ggml_tensor * tensor, int64_t i, int64_t * 
     }
 }
 
+int64_t ggml_ravel_index(const struct ggml_tensor * tensor, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
+    return i0 + i1*tensor->ne[0] + i2*tensor->ne[1]*tensor->ne[0] + i3*tensor->ne[2]*tensor->ne[1]*tensor->ne[0];
+}
+
 int32_t ggml_get_i32_1d(const struct ggml_tensor * tensor, int i) {
     if (!ggml_is_contiguous(tensor)) {
         int64_t id[4] = { 0, 0, 0, 0 };
@@ -11539,6 +11543,8 @@ static void ggml_compute_forward_scale(
             } break;
         default:
             {
+                fprintf(stderr, "%s\n", ggml_get_name(src0));
+                fprintf(stderr, "%s\n", ggml_get_name(dst));
                 GGML_ASSERT(false);
             } break;
     }
@@ -11655,7 +11661,12 @@ static void ggml_compute_forward_set(
         case GGML_TYPE_IQ2_S:
         default:
             {
-                GGML_ASSERT(false);
+                if (src0->type >= 0 && src0->type < GGML_TYPE_COUNT) {
+                    fprintf(stderr, "Unknown type for tensor %s: %d (%s)\n", ggml_get_name(dst), src0->type, ggml_type_name(src0->type));
+                } else {
+                    fprintf(stderr, "Unknown type for tensor %s: %d (out of GGML_TYPE_COUNT range)\n", ggml_get_name(dst), src0->type);
+                }
+                GGML_ASSERT(false && "unknown type");
             } break;
     }
 }

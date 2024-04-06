@@ -826,6 +826,7 @@ extern "C" {
 
     // Converts a flat index into coordinates
     GGML_API void    ggml_unravel_index(const struct ggml_tensor * tensor, int64_t i, int64_t * i0, int64_t * i1, int64_t * i2, int64_t * i3);
+    GGML_API int64_t ggml_ravel_index(const struct ggml_tensor * tensor, int64_t i0, int64_t i1, int64_t i2, int64_t i3);
 
     GGML_API int32_t ggml_get_i32_1d(const struct ggml_tensor * tensor, int i);
     GGML_API void    ggml_set_i32_1d(const struct ggml_tensor * tensor, int i, int32_t value);
