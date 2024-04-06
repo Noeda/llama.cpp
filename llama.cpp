@@ -9835,26 +9835,14 @@ struct llm_build_context {
                     attn_k_norm = ggml_cast(ctx0, attn_k_norm, GGML_TYPE_F32);
                     cb(attn_k_norm, "attn_k_norm_cast_F32", il);
 
-                    // Another PR clean up note: Noeda note: I learned
-                    // during writing blocked
-                    // llama_build_mat_mul_blocked_computation that I
-                    // misunderstood ggml_element_size/ggml_type_size etc.
-                    // slightly. On quanted types they are large and you
-                    // have to take quant block size into account when
-                    // using a view with offset.
-                    //
-                    // It just doesn't seem to matter for the following
-                    // views.
-                    //
-                    // PR clean up task: verify this is properly written.
                     Qcur = ggml_view_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens,
-                                ggml_element_size(Qcur) * n_embd_head,
-                                ggml_element_size(Qcur) * n_embd_head * n_head,
+                                ggml_row_size(Qcur->type, n_embd_head),
+                                ggml_row_size(Qcur->type, n_embd_head) * n_head,
                                 0);
                     cb(Qcur, "Qcur", il);
                     Kcur = ggml_view_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens,
-                                ggml_element_size(Kcur) * n_embd_head,
-                                ggml_element_size(Kcur) * n_embd_head * n_head_kv,
+                                ggml_row_size(Kcur->type, n_embd_head),
+                                ggml_row_size(Kcur->type, n_embd_head) * n_head_kv,
                                 0);
                     cb(Kcur, "Kcur", il);
 
