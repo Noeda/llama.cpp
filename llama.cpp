@@ -2948,6 +2948,11 @@ struct llama_model_loader {
         get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
         llm_kv = LLM_KV(llm_arch_from_string(arch_name));
 
+
+        if (arch_name == "command-r-plus") {
+            fprintf(stderr, "Warning: The 'command-r-plus' architecture will be removed and only exists in Noeda branch. GGUFs in this arch will be incompatible. Please use the branch in https://github.com/ggerganov/llama.cpp/pull/6491 or main 'llama.cpp' branch once it is merged. There are also known corruption issues in this branch at the moment.\n");
+        }
+
         // Save tensors data offset of the main file.
         // For subsidiary files, `meta` tensor data offset must not be used,
         // so we build a unified tensors index for weights.
@@ -14645,6 +14650,10 @@ struct llama_context * llama_new_context_with_model(
         // it's probably best to keep as much precision as possible for the states
         type_k = GGML_TYPE_F32; // required by ggml_ssm_conv for Mamba's conv_states
         type_v = GGML_TYPE_F32; // required by ggml_ssm_scan for Mamba's ssm_states
+    }
+
+    if (model->arch == LLM_ARCH_COMMAND_R_PLUS) {
+            fprintf(stderr, "Warning: The 'command-r-plus' architecture will be removed and only exists in Noeda branch. GGUFs in this arch will be incompatible. Please use the branch in https://github.com/ggerganov/llama.cpp/pull/6491 or main 'llama.cpp' branch once it is merged. There are also known corruption issues in this branch at the moment.\n");
     }
 
     GGML_ASSERT(hparams.n_embd_head_k % ggml_blck_size(type_k) == 0);
