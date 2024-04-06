@@ -5913,26 +5913,7 @@ static struct ggml_tensor * llama_build_mat_mul_blocked_computation(
 
     // make placeholder tensors for each block results.
     // 2D: (row, col) -> offset is: (x, y) -> x * nb_B + y
-    struct ggml_tensor ** result_blocks = (struct ggml_tensor **) malloc(nb_A * nb_B * sizeof(struct ggml_tensor *));
-
-    for (size_t i = 0; i < nb_A; ++i) {
-        for (size_t j = 0; j < nb_B; ++j) {
-            const size_t i_min = i * block_size;
-            const size_t j_min = j * block_size;
-            size_t i_max = i_min + block_size;
-            size_t j_max = j_min + block_size;
-
-            if (i_max > a_rows) { i_max = a_rows; }
-            if (j_max > b_cols) { j_max = b_cols; }
-
-            struct ggml_tensor * result_block = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, i_max - i_min, j_max - j_min);
-            result_block = ggml_scale(ctx, result_block, 0.0f);
-
-            cb(result_block, "result_block-fresh", il);
-            result_blocks[i * nb_B + j] = result_block;
-        }
-    }
-
+    struct ggml_tensor ** result_blocks = (struct ggml_tensor **) calloc(nb_A * nb_B, sizeof(struct ggml_tensor *));
     for (size_t i = 0; i < nb_A; ++i) {
         for (size_t j = 0; j < nb_B; ++j) {
             for (size_t k = 0; k < nb_A2; ++k) {
@@ -5955,68 +5936,40 @@ static struct ggml_tensor * llama_build_mat_mul_blocked_computation(
                 GGML_ASSERT(k_min * type_size_a % blck_size_a == 0);
                 GGML_ASSERT(k_min * type_size_b % blck_size_b == 0);
 
-                struct ggml_tensor * a_slice = ggml_view_2d(
+                struct ggml_tensor * a_slice = ggml_cont(ctx, ggml_view_2d(
                         ctx, a,
                         k_max - k_min,
                         i_max - i_min,
                         ggml_row_size(a->type, a->ne[0]),
-                        ggml_row_size(a->type, a->ne[0]) * i_min + k_min * type_size_a / blck_size_a);
+                        ggml_row_size(a->type, a->ne[0]) * i_min + k_min * type_size_a / blck_size_a));
 
                 cb(a_slice, "a_slice", il);
 
-                struct ggml_tensor * b_slice = ggml_view_2d(
+                struct ggml_tensor * b_slice = ggml_cont(ctx, ggml_view_2d(
                         ctx, b,
                         k_max - k_min,
                         j_max - j_min,
                         ggml_row_size(b->type, b->ne[0]),
-                        ggml_row_size(b->type, b->ne[0]) * j_min + k_min * type_size_b / blck_size_b);
+                        ggml_row_size(b->type, b->ne[0]) * j_min + k_min * type_size_b / blck_size_b));
 
                 cb(b_slice, "b_slice", il);
 
                 struct ggml_tensor * mm_result = ggml_mul_mat(ctx, a_slice, b_slice);
                 cb(mm_result, "mm_result", il);
 
-                result_blocks[i * nb_B + j] = ggml_add_inplace(ctx, result_blocks[i * nb_B + j], mm_result);
+                if (result_blocks[i * nb_B + j] == nullptr) {
+                    result_blocks[i * nb_B + j] = mm_result;
+                } else {
+                    result_blocks[i * nb_B + j] = ggml_add_inplace(ctx, result_blocks[i * nb_B + j], mm_result);
+                }
+
                 cb(result_blocks[i * nb_B + j], "result_slice", il);
             }
         }
     }
 
     // concate the results into one chonky tensor.
-    // ggml_concat goes mad if the first two dimensions are not the same.
-    //
-    // We use this strategy: find largest power of two that divides the
-    // size of all the tensors. Power of two to make it friendly to GPU
-    // code; (TODO: LCD might be better? but not sure it won't break code).
-    //
-    // Flatten all the tensors to (X, 1, N, 1).
-    size_t split_size = 1;
-    while (1) {
-        size_t candidate_split_size = split_size << 1;
-        bool bad = false;
-
-        for (size_t i = 0; i < nb_A * nb_B; ++i) {
-            size_t rows = result_blocks[i]->ne[0];
-            size_t cols = result_blocks[i]->ne[1];
-
-            if (candidate_split_size > rows * cols) {
-                bad = true;
-                break;
-            }
-
-            if ((rows * cols) % candidate_split_size != 0) {
-                bad = true;
-                break;
-            }
-        }
-
-        if (bad) {
-            break;
-        }
-
-        split_size = candidate_split_size;
-    }
-
+    const size_t split_size = 1;
     struct ggml_tensor * result_final = nullptr;
 
     // TODO: looks like concat also wants f32, so everything is casted to
@@ -6035,6 +5988,7 @@ static struct ggml_tensor * llama_build_mat_mul_blocked_computation(
     for (size_t i = 0; i < nb_A; ++i) {
         for (size_t j = 0; j < nb_B; ++j) {
             struct ggml_tensor * src_block = result_blocks[i * nb_B + j];
+            GGML_ASSERT(src_block);
 
             const size_t rows = src_block->ne[0];
             const size_t cols = src_block->ne[1];
