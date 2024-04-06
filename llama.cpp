@@ -13500,6 +13500,10 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
                (name.find("q_norm") != std::string::npos ||
                 name.find("k_norm") != std::string::npos)) {
         new_type = GGML_TYPE_F32;
+    } else if (arch == LLM_ARCH_COMMAND_R_PLUS && name.find("attn_k") != std::string::npos) {
+        new_type = GGML_TYPE_F16;
+    } else if (arch == LLM_ARCH_COMMAND_R_PLUS && name.find("attn_v") != std::string::npos) {
+        new_type = GGML_TYPE_F16;
     } else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS || ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS || ftype == LLAMA_FTYPE_MOSTLY_IQ1_S ||
                ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M    || ftype == LLAMA_FTYPE_MOSTLY_IQ1_M) {
         if (name.find("attn_v.weight") != std::string::npos) {
