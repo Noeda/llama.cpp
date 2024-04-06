@@ -5904,7 +5904,6 @@ static struct ggml_tensor * llama_build_mat_mul_blocked_computation(
         GGML_ASSERT(block_size > 0);
     }
 
-    //fprintf(stderr, "block_size=%zu a shape: %d %d b shape: %d %d\n", block_size, a_rows, a_cols, b_rows, b_cols);
 
     // O(N^3) nested loop, where N is number of blocks on one of the
     // constituent parts.
