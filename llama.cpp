@@ -5803,7 +5803,7 @@ static struct ggml_tensor * llama_build_mat_mul_blocked_computation(
         //fprintf(stderr, "warning: llama_build_mat_mul_blocked_computation() forced block size: %zu\n", forced_block_size);
     }
 
-    const size_t MAX_BYTES_BEFORE_SPLIT = 2000000000;
+    const size_t MAX_ELEMENTS_BEFORE_SPLIT = 2000000000;
 
     // the actual ggml_mul_mat supports batching. But this one doesn't.
     GGML_ASSERT(a->ne[2] == 1 && b->ne[2] == 1);
@@ -5849,7 +5849,7 @@ static struct ggml_tensor * llama_build_mat_mul_blocked_computation(
     } else {
         // figure out what is largest block_size we can use that will never
         // have an intermediate result bigger than
-        // MAX_BYTES_BEFORE_SPLIT
+        // MAX_ELEMENTS_BEFORE_SPLIT
         bool ok = true;
         while (block_size > 0) {
             ok = true;
@@ -5867,8 +5867,8 @@ static struct ggml_tensor * llama_build_mat_mul_blocked_computation(
                 if (i_max > a_rows) { i_max = a_rows; }
                 if (j_max > b_cols) { j_max = b_cols; }
 
-                const size_t bytes_size = sizeof(float) * (i_max - i_min) * (j_max - j_min);
-                if (bytes_size > MAX_BYTES_BEFORE_SPLIT) {
+                const size_t bytes_size = (i_max - i_min) * (j_max - j_min);
+                if (bytes_size > MAX_ELEMENTS_BEFORE_SPLIT) {
                     ok = false;
                 }
             }
@@ -5887,10 +5887,10 @@ static struct ggml_tensor * llama_build_mat_mul_blocked_computation(
                 if (j_max > b_cols) { j_max = b_cols; }
                 if (k_max > a_cols) { k_max = a_cols; }
 
-                const size_t bytes_size_a = sizeof(float) * (k_max - k_min) * (i_max - i_min);
-                const size_t bytes_size_b = sizeof(float) * (k_max - k_min) * (j_max - j_min);
+                const size_t bytes_size_a = (k_max - k_min) * (i_max - i_min);
+                const size_t bytes_size_b = (k_max - k_min) * (j_max - j_min);
 
-                if (bytes_size_a > MAX_BYTES_BEFORE_SPLIT || bytes_size_b > MAX_BYTES_BEFORE_SPLIT) {
+                if (bytes_size_a > MAX_ELEMENTS_BEFORE_SPLIT || bytes_size_b > MAX_ELEMENTS_BEFORE_SPLIT) {
                     ok = false;
                 }
             }
