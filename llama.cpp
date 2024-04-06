@@ -5759,6 +5759,46 @@ static void llm_build_kv_store(
     ggml_build_forward_expand(graph, ggml_cpy(ctx, v_cur_t, v_cache_view));
 }
 
+static struct ggml_tensor * llama_build_divide_and_conquer_concat(
+    struct     ggml_context  * ctx,
+    struct     ggml_tensor  ** tensors,
+    size_t                     n_tensors)
+{
+    if (n_tensors == 1) {
+        return tensors[0];
+    }
+    else if (n_tensors == 2) {
+        struct ggml_tensor * flattened_1 = ggml_view_3d(ctx,
+            tensors[0],
+            1,
+            1,
+            tensors[0]->ne[0] * tensors[0]->ne[1],
+            ggml_row_size(tensors[0]->type, 1),
+            ggml_row_size(tensors[0]->type, 1) * 1,
+            0);
+        struct ggml_tensor * flattened_2 = ggml_view_3d(ctx,
+            tensors[1],
+            1,
+            1,
+            tensors[1]->ne[0] * tensors[1]->ne[1],
+            ggml_row_size(tensors[1]->type, 1),
+            ggml_row_size(tensors[1]->type, 1) * 1,
+            0);
+
+        return ggml_concat(ctx, flattened_1, flattened_2);
+    }
+    else if (n_tensors > 2) {
+        size_t middle = n_tensors / 2;
+        struct ggml_tensor * left_tensor = llama_build_divide_and_conquer_concat(ctx, tensors, middle);
+        struct ggml_tensor * right_tensor = llama_build_divide_and_conquer_concat(ctx, tensors + middle, n_tensors - middle);
+
+        return ggml_concat(ctx, left_tensor, right_tensor);
+    }
+    else {
+        GGML_ASSERT(false && "n_tensors must be at least 1");
+    }
+}
+
 static struct ggml_tensor * llama_build_mat_mul_blocked_computation(
     /*
      * Does (almost) same thing as ggml_mat_mul mathematically speaking,
@@ -5969,22 +6009,13 @@ static struct ggml_tensor * llama_build_mat_mul_blocked_computation(
     }
 
     // concate the results into one chonky tensor.
-    const size_t split_size = 1;
-    struct ggml_tensor * result_final = nullptr;
+    struct ggml_tensor * result_final = llama_build_divide_and_conquer_concat(
+            ctx,
+            result_blocks,
+            nb_A * nb_B);
 
-    // TODO: looks like concat also wants f32, so everything is casted to
-    // f32 here.. A datatype-agnostic concat would be nice; or ability to
-    // do the tensor equivalent of unsafe type cast.
-    //
-    // The Command-R+ tensor this code was written for was 6GB. So this is
-    // going to handle 12GB I guess. Oof.
-    //
-    // I believe you could be smarter and combine hierarchially instead of
-    // one by one. I.e. we are doing a concetenation like this:
-    // for x in range(100):
-    //   accum = accum + [x]     (copies accum every time? maybe. didn't read concat code)
-    //
-    // You could instead divide and conquer to make it a bit smarter.
+    // divide-and conquer.
+    /*
     for (size_t i = 0; i < nb_A; ++i) {
         for (size_t j = 0; j < nb_B; ++j) {
             struct ggml_tensor * src_block = result_blocks[i * nb_B + j];
@@ -6001,8 +6032,8 @@ static struct ggml_tensor * llama_build_mat_mul_blocked_computation(
                     nflattened_rows,
                     1,
                     n3,
-                    nflattened_rows * ggml_element_size(src_block),
-                    nflattened_rows * ggml_element_size(src_block),
+                    ggml_row_size(src_block->type, nflattened_rows),
+                    ggml_row_size(src_block->type, nflattened_rows) * 1,
                     0);
 
             if (result_final == nullptr) {
@@ -6022,6 +6053,7 @@ static struct ggml_tensor * llama_build_mat_mul_blocked_computation(
             cb(result_final, "result_final-accumulator", il);
         }
     }
+    */
 
     result_final = ggml_reshape_2d(ctx, result_final, c_rows, c_cols);
     cb(result_final, "result_final", il);
