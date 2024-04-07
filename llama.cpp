@@ -5764,44 +5764,102 @@ static void llm_build_kv_store(
     ggml_build_forward_expand(graph, ggml_cpy(ctx, v_cur_t, v_cache_view));
 }
 
-static struct ggml_tensor * llama_build_divide_and_conquer_concat(
+struct ggml_tensor * llama_build_divide_and_conquer_concat(
     struct     ggml_context  * ctx,
     struct     ggml_tensor  ** tensors,
-    size_t                     n_tensors)
+    size_t                     n_a,
+    size_t                     n_b)
 {
-    if (n_tensors == 1) {
-        return tensors[0];
-    }
-    else if (n_tensors == 2) {
-        struct ggml_tensor * flattened_1 = ggml_view_3d(ctx,
-            tensors[0],
-            1,
-            1,
-            tensors[0]->ne[0] * tensors[0]->ne[1],
-            ggml_row_size(tensors[0]->type, 1),
-            ggml_row_size(tensors[0]->type, 1) * 1,
-            0);
-        struct ggml_tensor * flattened_2 = ggml_view_3d(ctx,
-            tensors[1],
-            1,
-            1,
-            tensors[1]->ne[0] * tensors[1]->ne[1],
-            ggml_row_size(tensors[1]->type, 1),
-            ggml_row_size(tensors[1]->type, 1) * 1,
-            0);
+    const size_t ntensors = n_a * n_b;
 
-        return ggml_concat(ctx, flattened_1, flattened_2);
-    }
-    else if (n_tensors > 2) {
-        size_t middle = n_tensors / 2;
-        struct ggml_tensor * left_tensor = llama_build_divide_and_conquer_concat(ctx, tensors, middle);
-        struct ggml_tensor * right_tensor = llama_build_divide_and_conquer_concat(ctx, tensors + middle, n_tensors - middle);
+    size_t final_cols = 0;
+    size_t final_rows = 0;
 
-        return ggml_concat(ctx, left_tensor, right_tensor);
+    for (size_t i = 0; i < n_a; ++i) {
+        final_cols += tensors[i * n_b]->ne[0];
     }
-    else {
-        GGML_ASSERT(false && "n_tensors must be at least 1");
+    for (size_t j = 0; j < n_b; ++j) {
+        final_rows += tensors[j]->ne[1];
     }
+    //printf("sz %d %d\n", final_cols, final_rows);
+
+    //struct ggml_tensor * result = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, final_cols, final_rows);
+
+    // (ab)use ggml_concat to stitch together a grid of 2D tensors into one
+    // big 1D tensor.
+    //
+    // ggml_concat only supports concatenating on the third dimension.
+    //
+    // 1. For each row in the 2D grid:
+    //      Reshape 2D dimension to 3D dimension
+    //      Concatenate along the third dimension
+    //      Reshape back to 2D dimension
+    // 2. This gets us N tensors, where N is number of rows, concatenated.
+    //      Do the same thing:
+    //        Transpose the tensor
+    //        Reshape 2D to 3D
+    //        Concat
+    //        Reshape back
+
+    ggml_tensor * concatted_whole = nullptr;
+    for (size_t i = 0; i < n_a; ++i) {
+        ggml_tensor * concatted_row = nullptr;
+        for (size_t j = 0; j < n_b; ++j) {
+            struct ggml_tensor * cur = tensors[i * n_b + j];
+            if (concatted_row == nullptr) {
+                concatted_row = ggml_reshape_3d(ctx, cur, cur->ne[0], 1, cur->ne[1]);
+            } else {
+                concatted_row = ggml_concat(ctx, concatted_row, ggml_reshape_3d(ctx, cur, cur->ne[0], 1, cur->ne[1]));
+            }
+        }
+        concatted_row = ggml_cont(ctx, concatted_row);
+        //printf("concatted row dims: %d %d %d %d\n", concatted_row->ne[0], concatted_row->ne[1], concatted_row->ne[2], concatted_row->ne[3]);
+        if (concatted_whole == nullptr) {
+            concatted_row = ggml_reshape_3d(ctx, concatted_row, concatted_row->ne[0], concatted_row->ne[2], 1);
+            concatted_row = ggml_transpose(ctx, concatted_row);
+            concatted_row = ggml_cont(ctx, concatted_row);
+            concatted_whole = ggml_reshape_3d(ctx, concatted_row, concatted_row->ne[0], 1, concatted_row->ne[1]);
+        } else {
+            concatted_row = ggml_reshape_3d(ctx, concatted_row, concatted_row->ne[0], concatted_row->ne[2], 1);
+            concatted_row = ggml_transpose(ctx, concatted_row);
+            concatted_row = ggml_cont(ctx, concatted_row);
+            concatted_whole = ggml_concat(ctx, concatted_whole, ggml_reshape_3d(ctx, concatted_row, concatted_row->ne[0], 1, concatted_row->ne[1]));
+        }
+        //printf("concatted whole dims: %d %d %d %d\n", concatted_whole->ne[0], concatted_whole->ne[1], concatted_whole->ne[2], concatted_whole->ne[3]);
+    }
+    concatted_whole = ggml_reshape_3d(ctx, concatted_whole, concatted_whole->ne[0], concatted_whole->ne[2], 1);
+    concatted_whole = ggml_cont(ctx, ggml_transpose(ctx, concatted_whole));
+    //printf("final concatted whole dims: %d %d %d %d\n", concatted_whole->ne[0], concatted_whole->ne[1], concatted_whole->ne[2], concatted_whole->ne[3]);
+    return concatted_whole;
+
+    /*
+    size_t col_idx = 0;
+    for (size_t i = 0; i < n_a; ++i) {
+        size_t row_idx = 0;
+        size_t ncols = 0;
+        for (int64_t j = 0; j < n_b; ++j) {
+            struct ggml_tensor * cur = tensors[i * n_b + j];
+            //printf("i=%d j=%d cur->ne[0]=%d cur->ne[1]=%d col_idx=%d row_idx=%d\n", i, j, cur->ne[0], cur->ne[1], col_idx, row_idx);
+            ncols = cur->ne[0];
+
+            result = ggml_set(
+                ctx,
+                result,
+                cur,
+                result->nb[1],
+                result->nb[2],
+                result->nb[3],
+
+                row_idx * ggml_row_size(result->type, result->ne[0]) +
+                col_idx * ggml_element_size(result));
+
+            row_idx += cur->ne[1];
+        }
+        col_idx += ncols;
+    }
+    return result;
+    */
+
 }
 
 static struct ggml_tensor * llama_build_mat_mul_blocked_computation(
@@ -6014,10 +6072,12 @@ static struct ggml_tensor * llama_build_mat_mul_blocked_computation(
     }
 
     // concate the results into one chonky tensor.
-    struct ggml_tensor * result_final = llama_build_divide_and_conquer_concat(
+    struct ggml_tensor * result = llama_build_divide_and_conquer_concat(
             ctx,
             result_blocks,
-            nb_A * nb_B);
+            nb_A,
+            nb_B);
+    cb(result, "result-stitched", il);
 
     // divide-and conquer.
     /*
@@ -6060,12 +6120,12 @@ static struct ggml_tensor * llama_build_mat_mul_blocked_computation(
     }
     */
 
-    result_final = ggml_reshape_2d(ctx, result_final, c_rows, c_cols);
-    cb(result_final, "result_final", il);
+    //result_final = ggml_reshape_2d(ctx, result_final, c_rows, c_cols);
+    //cb(result_final, "result_final", il);
 
     free(result_blocks);
 
-    return result_final;
+    return result;
 }
 
 static struct ggml_tensor * llm_build_norm(
