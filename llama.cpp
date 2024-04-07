@@ -5960,6 +5960,7 @@ static struct ggml_tensor * llama_build_mat_mul_blocked_computation(
             }
             break;
         }
+        block_size /= 2;
         GGML_ASSERT(block_size > 0);
     }
 
