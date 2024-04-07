@@ -2950,7 +2950,7 @@ struct llama_model_loader {
 
 
         if (arch_name == "command-r-plus") {
-            fprintf(stderr, "Warning: The 'command-r-plus' architecture will be removed and only exists in Noeda branch. GGUFs in this arch will be incompatible. Please use the branch in https://github.com/ggerganov/llama.cpp/pull/6491 or main 'llama.cpp' branch once it is merged. There are also known corruption issues in this branch at the moment.\n");
+            fprintf(stderr, "Warning: The 'command-r-plus' architecture will be removed and only exists in Noeda branch. GGUFs in this arch will be incompatible. Please use the branch in https://github.com/ggerganov/llama.cpp/pull/6491 or main 'llama.cpp' branch once it is merged.\n");
         }
 
         // Save tensors data offset of the main file.
@@ -5764,27 +5764,12 @@ static void llm_build_kv_store(
     ggml_build_forward_expand(graph, ggml_cpy(ctx, v_cur_t, v_cache_view));
 }
 
-struct ggml_tensor * llama_build_divide_and_conquer_concat(
+static struct ggml_tensor * llama_stitch_2d_grid_of_tensors_together(
     struct     ggml_context  * ctx,
     struct     ggml_tensor  ** tensors,
     size_t                     n_a,
     size_t                     n_b)
 {
-    const size_t ntensors = n_a * n_b;
-
-    size_t final_cols = 0;
-    size_t final_rows = 0;
-
-    for (size_t i = 0; i < n_a; ++i) {
-        final_cols += tensors[i * n_b]->ne[0];
-    }
-    for (size_t j = 0; j < n_b; ++j) {
-        final_rows += tensors[j]->ne[1];
-    }
-    //printf("sz %d %d\n", final_cols, final_rows);
-
-    //struct ggml_tensor * result = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, final_cols, final_rows);
-
     // (ab)use ggml_concat to stitch together a grid of 2D tensors into one
     // big 1D tensor.
     //
@@ -5831,35 +5816,6 @@ struct ggml_tensor * llama_build_divide_and_conquer_concat(
     concatted_whole = ggml_cont(ctx, ggml_transpose(ctx, concatted_whole));
     //printf("final concatted whole dims: %d %d %d %d\n", concatted_whole->ne[0], concatted_whole->ne[1], concatted_whole->ne[2], concatted_whole->ne[3]);
     return concatted_whole;
-
-    /*
-    size_t col_idx = 0;
-    for (size_t i = 0; i < n_a; ++i) {
-        size_t row_idx = 0;
-        size_t ncols = 0;
-        for (int64_t j = 0; j < n_b; ++j) {
-            struct ggml_tensor * cur = tensors[i * n_b + j];
-            //printf("i=%d j=%d cur->ne[0]=%d cur->ne[1]=%d col_idx=%d row_idx=%d\n", i, j, cur->ne[0], cur->ne[1], col_idx, row_idx);
-            ncols = cur->ne[0];
-
-            result = ggml_set(
-                ctx,
-                result,
-                cur,
-                result->nb[1],
-                result->nb[2],
-                result->nb[3],
-
-                row_idx * ggml_row_size(result->type, result->ne[0]) +
-                col_idx * ggml_element_size(result));
-
-            row_idx += cur->ne[1];
-        }
-        col_idx += ncols;
-    }
-    return result;
-    */
-
 }
 
 static struct ggml_tensor * llama_build_mat_mul_blocked_computation(
@@ -6072,56 +6028,12 @@ static struct ggml_tensor * llama_build_mat_mul_blocked_computation(
     }
 
     // concate the results into one chonky tensor.
-    struct ggml_tensor * result = llama_build_divide_and_conquer_concat(
+    struct ggml_tensor * result = llama_stitch_2d_grid_of_tensors_together(
             ctx,
             result_blocks,
             nb_A,
             nb_B);
     cb(result, "result-stitched", il);
-
-    // divide-and conquer.
-    /*
-    for (size_t i = 0; i < nb_A; ++i) {
-        for (size_t j = 0; j < nb_B; ++j) {
-            struct ggml_tensor * src_block = result_blocks[i * nb_B + j];
-            GGML_ASSERT(src_block);
-
-            const size_t rows = src_block->ne[0];
-            const size_t cols = src_block->ne[1];
-            GGML_ASSERT(rows * cols % split_size == 0);
-
-            const size_t nflattened_rows = split_size;
-            const size_t n3 = (rows * cols) / split_size;
-
-            src_block = ggml_view_3d(ctx, src_block,
-                    nflattened_rows,
-                    1,
-                    n3,
-                    ggml_row_size(src_block->type, nflattened_rows),
-                    ggml_row_size(src_block->type, nflattened_rows) * 1,
-                    0);
-
-            if (result_final == nullptr) {
-                if (src_block->type != GGML_TYPE_F32) {
-                    result_final = ggml_cast(ctx, src_block, GGML_TYPE_F32);
-                    cb(result_final, "result-upcast", il);
-                } else {
-                    result_final = src_block;
-                }
-                continue;
-            }
-
-            if (src_block->type != GGML_TYPE_F32) {
-                src_block = ggml_cast(ctx, src_block, GGML_TYPE_F32);
-            }
-            result_final = ggml_concat(ctx, result_final, src_block);
-            cb(result_final, "result_final-accumulator", il);
-        }
-    }
-    */
-
-    //result_final = ggml_reshape_2d(ctx, result_final, c_rows, c_cols);
-    //cb(result_final, "result_final", il);
 
     free(result_blocks);
 
@@ -14713,7 +14625,7 @@ struct llama_context * llama_new_context_with_model(
     }
 
     if (model->arch == LLM_ARCH_COMMAND_R_PLUS) {
-            fprintf(stderr, "Warning: The 'command-r-plus' architecture will be removed and only exists in Noeda branch. GGUFs in this arch will be incompatible. Please use the branch in https://github.com/ggerganov/llama.cpp/pull/6491 or main 'llama.cpp' branch once it is merged. There are also known corruption issues in this branch at the moment.\n");
+            fprintf(stderr, "Warning: The 'command-r-plus' architecture will be removed and only exists in Noeda branch. GGUFs in this arch will be incompatible. Please use the branch in https://github.com/ggerganov/llama.cpp/pull/6491 or main 'llama.cpp' branch once it is merged.\n");
     }
 
     GGML_ASSERT(hparams.n_embd_head_k % ggml_blck_size(type_k) == 0);

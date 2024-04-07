@@ -173,6 +173,11 @@ class Model(ABC):
 
     def write(self):
         self.write_tensors()
+
+        if self.model_arch == gguf.MODEL_ARCH.COMMAND_R_PLUS:
+            sys.stderr.write("""
+                Warning: The 'command-r-plus' architecture will be removed and only exists in Noeda branch. GGUFs in this arch will be incompatible. Please use the branch in https://github.com/ggerganov/llama.cpp/pull/6491 or main 'llama.cpp' branch once it is merged. If you distribute the files you are about to create, know that they will not be compatible with mainline llama.cpp.\n""")
+
         self.gguf_writer.write_header_to_file()
         self.gguf_writer.write_kv_data_to_file()
         self.gguf_writer.write_tensors_to_file()
