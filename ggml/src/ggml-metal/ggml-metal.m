@@ -14,7 +14,9 @@
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
 // max memory buffers that can be mapped to the device
-#define GGML_METAL_MAX_BUFFERS 64
+// if using one-metal-buffer-per-tensor, there might be at least one buffer
+// per tensor (~thousands).
+#define GGML_METAL_MAX_BUFFERS 10000
 
 // max number of MTLCommandBuffer used to submit a graph for processing
 #define GGML_METAL_MAX_COMMAND_BUFFERS 8
@@ -66,6 +68,75 @@ static struct ggml_backend_metal_device_context {
     /*.use_bfloat              =*/ false,
     /*.name                    =*/ "",
 };
+
+// ~~ NOTE [one-buffer-per-tensor] [lazy allocation] ~~
+// 2025-05-15 - Mikko Juola
+//
+// If GGML_METAL_ONE_BUFFER_PER_TENSOR environment variable is set (value
+// doesn't matter), then this backend will allocate one MTLBuffer per one
+// ggml_tensor, and it will do it on-demand when an MTLBuffer is requested
+// for a tensor.
+//
+// If using this to make llama.cpp handle memory pressure situations
+// better, you might want to also adjust some sysctls (TODO: verify which
+//                                                     of these are
+//                                                     truly relevant):
+//
+// iogpu.wired_lwm_mb - set to bit below physical memory limit. 185000 has
+//                      worked on 192GB Mac. Otherwise OS seems very eager
+//                      to evict a lot more memory than makes sense.
+// iogpu.dynamic_lwm - maybe needs to be set to 0 to let wired_lwm_mb
+//                     take effect (a guess; I did not test).
+// iogpu.disable_wired_collector - maybe should be 1
+// iogpu.wired_limit_mb - this is the usual sysctl people know already to
+//                        put higher, but these changes might make it irrelevant.
+//
+// --- Context behind this:
+//
+// As part of trying to make a DeepSeek-family models work on 192GB Mac
+// Studio, I (Mikko) made some changes to how this backend deals with
+// memory.
+//
+// The changes are:
+//   1. Mark Metal buffer allocations to be volatile (volatile = OS may
+//      evict memory under memory pressure. Allocated memory won't appear
+//      as "wired" in activity manager).
+//   2. Allocate Metal buffers in a "one buffer per tensor" fashion instead
+//      of trying to make as few Metal buffers as possible and putting
+//      tensors inside it. For reasons I don't fully grasp, this seems much
+//      easier for OS to handle under memory pressure (my current guess: OS
+//      might be evicting at the level of an entire buffer and making many
+//      smaller buffers instead makes eviction events less disruptive...but
+//      it's maybe something else. I should figure out how do I observe
+//      memory events on MacOS better to verify).
+//
+// Without these changes, the model files are too large for this 192GB
+// machine. In particular, it was annoyingly easy to lock up the entire
+// machine under too much memory pressure, forcing a restart. As of writing
+// of this, I'm not perfectly confident why it happens but here is my
+// guess:
+//
+// 1. llama.cpp mmap()s large .gguf files, bigger than can fit in physical
+// memory.
+//
+// 2. llama.cpp allocates Metal buffers with newBufferWithBytesNoCopy on
+// the mmap()ped memory address.
+//
+// 3. llama.cpp tells the regions to be resident in memory with residency
+// sets (if supported) and/or by setting the memory to be non-volatile.
+//
+// 4. If the memory made resident exceeds the actual capacity of the
+// system, this can lock up the system. The sysctl iogpu.wired_limit_mb
+// does not seem to stop this.
+//
+// 5. You don't get the lock-up easily in other circumstances, because
+// iogpu.wired_limit_mb is respected by other Metal allocations (i.e. the
+// ones not using newBufferWithBytesNoCopy).
+//
+
+static bool ggml_backend_metal_one_buffer_per_tensor_is_enabled(void) {
+    return getenv("GGML_METAL_ONE_BUFFER_PER_TENSOR") != NULL;
+}
 
 // acquire
 static id<MTLDevice> ggml_backend_metal_device_acq(struct ggml_backend_metal_device_context * ctx) {
@@ -691,12 +762,11 @@ static id<MTLBuffer> ggml_metal_mem_pool_alloc(struct ggml_metal_mem_pool * mem_
     for (ggml_metal_heap_ptr * ptr in mem_pool->heaps) {
         struct ggml_metal_heap * heap = ptr.data;
         if (heap->offs + size_aligned <= [heap->obj size]) {
-            // if this is the first buffer in the heap for the current command buffer, tell the OS that
-            //   it cannot free the memory used by the heap
-            // ref: https://developer.apple.com/documentation/metal/mtlpurgeablestate?language=objc
-            if ([heap->bufs count] == 0) {
-                [heap->obj setPurgeableState:MTLPurgeableStateNonVolatile];
-            }
+            // Set heap to volatile (if not already), i.e. OS may evict the
+            // memory if there is memory pressure. Avoids out-of-memory
+            // errors and Mac getting stuck if you force too much memory to
+            // be resident.
+            [heap->obj setPurgeableState:MTLPurgeableStateVolatile];
 
             id<MTLBuffer> buf = [heap->obj newBufferWithLength:size_aligned options:MTLResourceStorageModePrivate offset:heap->offs];
             if (buf == nil) {
@@ -727,8 +797,9 @@ static id<MTLBuffer> ggml_metal_mem_pool_alloc(struct ggml_metal_mem_pool * mem_
     heap_ptr.data = heap;
     ggml_metal_heap_reset(heap);
 
-    [heap->obj setPurgeableState:MTLPurgeableStateNonVolatile];
+    [heap->obj setPurgeableState:MTLPurgeableStateVolatile];
     id<MTLBuffer> buf = [heap->obj newBufferWithLength:size_aligned options:MTLResourceStorageModePrivate offset:heap->offs];
+    [buf setPurgeableState:MTLPurgeableStateVolatile];
     if (buf == nil) {
         GGML_LOG_ERROR("%s: error: failed to create MTLBuffer with size %zu\n", __func__, size_aligned);
         return NULL;
@@ -1480,6 +1551,8 @@ struct ggml_backend_metal_buffer_context {
     size_t all_size;
     bool owned;
 
+    struct ggml_backend_metal_device_context * ctx_dev;
+
     // multiple buffers are used only to avoid the maximum buffer size limitation when using mmap
     int n_buffers;
     struct ggml_backend_metal_buffer buffers[GGML_METAL_MAX_BUFFERS];
@@ -1551,6 +1624,8 @@ static void ggml_backend_metal_buffer_rset_free(struct ggml_backend_metal_buffer
 // the assumption is that there is 1-to-1 mapping between the host and device memory buffers, so we can find the
 // Metal buffer based on the host memory pointer
 //
+// If one-buffer-per-tensor is on (GGML_METAL_ONE_BUFFER_PER_TENSOR=1),
+// then this may create a MTLBuffer on the fly, and return it.
 static id<MTLBuffer> ggml_metal_get_buffer(struct ggml_tensor * t, size_t * offs) {
     //GGML_LOG_INFO("%s: data tensor '%16s', offs_data = %8ld, offs_eval = %8ld, offs_cach = %8ld\n", __func__, t->name, offs_data, offs_eval, offs_cach);
 
@@ -1561,7 +1636,8 @@ static id<MTLBuffer> ggml_metal_get_buffer(struct ggml_tensor * t, size_t * offs
     struct ggml_backend_metal_buffer_context * buf_ctx = (struct ggml_backend_metal_buffer_context *) buffer->context;
 
     // find the view that contains the tensor fully
-    for (int i = 0; i < buf_ctx->n_buffers; ++i) {
+    int i = 0;
+    for (i = 0; i < buf_ctx->n_buffers; ++i) {
         const int64_t ioffs = (int64_t) t->data - (int64_t) buf_ctx->buffers[i].data;
 
         //GGML_LOG_INFO("ioffs = %10ld, tsize = %10ld, sum = %10ld, buf_ctx->buffers[%d].size = %10ld\n", ioffs, tsize, ioffs + tsize, i, buf_ctx->buffers[i].size);
@@ -1574,8 +1650,32 @@ static id<MTLBuffer> ggml_metal_get_buffer(struct ggml_tensor * t, size_t * offs
         }
     }
 
-    GGML_LOG_ERROR("%s: error: tensor '%s' buffer is nil\n", __func__, t->name);
+    if (i >= GGML_METAL_MAX_BUFFERS) {
+        GGML_LOG_ERROR("%s: maximum number of metal buffers reached "
+                       "(GGML_METAL_MAX_BUFFERS=%d).\n", __func__, GGML_METAL_MAX_BUFFERS);
+        return nil;
+    }
 
+    const int has_one_buffer_per_tensor = ggml_backend_metal_one_buffer_per_tensor_is_enabled();
+
+    // on-demand create an MTLBuffer
+    if (has_one_buffer_per_tensor) {
+        buf_ctx->buffers[buf_ctx->n_buffers].data = t->data;
+        buf_ctx->buffers[buf_ctx->n_buffers].size = tsize;
+        buf_ctx->buffers[buf_ctx->n_buffers].metal = nil;
+        buf_ctx->buffers[buf_ctx->n_buffers].metal = [buf_ctx->ctx_dev->mtl_device newBufferWithBytesNoCopy:t->data length:tsize options:MTLResourceStorageModeShared deallocator:nil];
+        if (buf_ctx->buffers[buf_ctx->n_buffers].metal == nil) {
+            GGML_LOG_ERROR("%s: error: failed to lazy-allocate buffer, size = %8.2f MiB\n", __func__, tsize / 1024.0 / 1024.0);
+            return nil;
+        }
+
+        [buf_ctx->buffers[buf_ctx->n_buffers].metal setPurgeableState:MTLPurgeableStateVolatile];
+        ++buf_ctx->n_buffers;
+
+        return buf_ctx->buffers[buf_ctx->n_buffers-1].metal;
+    }
+
+    GGML_LOG_ERROR("%s: error: tensor '%s' buffer is nil\n", __func__, t->name);
     return nil;
 }
 
@@ -5412,93 +5512,6 @@ static ggml_backend_buffer_type_t ggml_backend_metal_buffer_from_ptr_type(void) 
     return &ggml_backend_buffer_from_ptr_type_metal;
 }
 
-// TODO: obsoleted by ggml_backend_metal_device_buffer_from_ptr
-ggml_backend_buffer_t ggml_backend_metal_buffer_from_ptr(void * data, size_t size, size_t max_size) {
-    struct ggml_backend_metal_buffer_context * ctx = calloc(1, sizeof(struct ggml_backend_metal_buffer_context));
-
-    ctx->all_data = data;
-    ctx->all_size = size;
-    ctx->owned = false;
-    ctx->n_buffers = 0;
-
-    const size_t size_page = sysconf(_SC_PAGESIZE);
-
-    // page-align the data ptr
-    {
-        const uintptr_t offs = (uintptr_t) data % size_page;
-        data  = (void *) ((char *) data - offs);
-        size += offs;
-    }
-
-    size_t size_aligned = size;
-    if ((size_aligned % size_page) != 0) {
-        size_aligned += (size_page - (size_aligned % size_page));
-    }
-
-    struct ggml_backend_metal_device_context * ctx_dev = &g_ggml_ctx_dev_main;
-    id<MTLDevice> device = ggml_backend_metal_device_acq(ctx_dev);
-
-    // the buffer fits into the max buffer size allowed by the device
-    if (size_aligned <= device.maxBufferLength) {
-        ctx->buffers[ctx->n_buffers].data  = data;
-        ctx->buffers[ctx->n_buffers].size  = size;
-        ctx->buffers[ctx->n_buffers].metal = nil;
-
-        if (size_aligned > 0) {
-            ctx->buffers[ctx->n_buffers].metal = [device newBufferWithBytesNoCopy:data length:size_aligned options:MTLResourceStorageModeShared deallocator:nil];
-
-            if (ctx->buffers[ctx->n_buffers].metal == nil) {
-                GGML_LOG_ERROR("%s: error: failed to allocate buffer, size = %8.2f MiB\n", __func__, size_aligned / 1024.0 / 1024.0);
-                return false;
-            }
-        }
-
-        ggml_backend_metal_log_allocated_size(device, size_aligned);
-
-        ++ctx->n_buffers;
-    } else {
-        // this overlap between the views will guarantee that the tensor with the maximum size will fully fit into
-        // one of the views
-        const size_t size_ovlp = ((max_size + size_page - 1) / size_page + 1) * size_page; // round-up 2 pages just in case
-        const size_t size_step = device.maxBufferLength - size_ovlp;
-        const size_t size_view = device.maxBufferLength;
-
-        for (size_t i = 0; i < size; i += size_step) {
-            const size_t size_step_aligned = (i + size_view <= size) ? size_view : (size_aligned - i);
-
-            ctx->buffers[ctx->n_buffers].data  = (void *) ((uint8_t *) data + i);
-            ctx->buffers[ctx->n_buffers].size  = size_step_aligned;
-            ctx->buffers[ctx->n_buffers].metal = nil;
-
-            if (size_step_aligned > 0) {
-                ctx->buffers[ctx->n_buffers].metal = [device newBufferWithBytesNoCopy:(void *) ((uint8_t *) data + i) length:size_step_aligned options:MTLResourceStorageModeShared deallocator:nil];
-
-                if (ctx->buffers[ctx->n_buffers].metal == nil) {
-                    GGML_LOG_ERROR("%s: error: failed to allocate buffer, size = %8.2f MiB\n", __func__, size_step_aligned / 1024.0 / 1024.0);
-                    return false;
-                }
-            }
-
-            ggml_backend_metal_log_allocated_size(device, size_step_aligned);
-
-            if (i + size_step < size) {
-                GGML_LOG_INFO("\n");
-            }
-
-            ++ctx->n_buffers;
-        }
-    }
-
-    if (!ggml_backend_metal_buffer_rset_init(ctx, ctx_dev, device)) {
-        GGML_LOG_ERROR("%s: error: failed to initialize residency set\n", __func__);
-        free(ctx);
-        ggml_backend_metal_device_rel(ctx_dev);
-        return NULL;
-    }
-
-    return ggml_backend_buffer_init(ggml_backend_metal_buffer_from_ptr_type(), ggml_backend_metal_buffer_i, ctx, size);
-}
-
 // backend
 
 static const char * ggml_backend_metal_name(ggml_backend_t backend) {
@@ -5749,6 +5762,17 @@ static ggml_backend_buffer_t ggml_backend_metal_device_buffer_from_ptr(ggml_back
     ctx->owned = false;
     ctx->n_buffers = 0;
 
+    struct ggml_backend_metal_device_context * ctx_dev = (struct ggml_backend_metal_device_context *)dev->context;
+    ggml_backend_metal_device_acq(ctx_dev);
+    // TODO: the ctx_dev here is never released. This is used by
+    // one-buffer-per-tensor code and I (Mikko) could not immediately find
+    // how the lifecycle of the ggml_backend_metal_buffer_context works (is
+    // it actually freed explicitly anywhere in the first place?) so I
+    // lazily decided I just leak it now.
+    //
+    // ctx_dev is used by one-buffer-per-tensor MTLBuffer creation.
+    ctx->ctx_dev = ctx_dev;
+
     const size_t size_page = sysconf(_SC_PAGESIZE);
 
     // page-align the data ptr
@@ -5763,65 +5787,76 @@ static ggml_backend_buffer_t ggml_backend_metal_device_buffer_from_ptr(ggml_back
         size_aligned += (size_page - (size_aligned % size_page));
     }
 
-    struct ggml_backend_metal_device_context * ctx_dev = (struct ggml_backend_metal_device_context *)dev->context;
     id<MTLDevice> device = ggml_backend_metal_device_acq(ctx_dev);
+    const int has_one_buffer_per_tensor = ggml_backend_metal_one_buffer_per_tensor_is_enabled();
 
-    // the buffer fits into the max buffer size allowed by the device
-    if (size_aligned <= device.maxBufferLength) {
-        ctx->buffers[ctx->n_buffers].data  = ptr;
-        ctx->buffers[ctx->n_buffers].size  = size;
-        ctx->buffers[ctx->n_buffers].metal = nil;
-
-        if (size_aligned > 0) {
-            ctx->buffers[ctx->n_buffers].metal = [device newBufferWithBytesNoCopy:ptr length:size_aligned options:MTLResourceStorageModeShared deallocator:nil];
-
-            if (ctx->buffers[ctx->n_buffers].metal == nil) {
-                GGML_LOG_ERROR("%s: error: failed to allocate buffer, size = %8.2f MiB\n", __func__, size_aligned / 1024.0 / 1024.0);
-                return false;
-            }
-        }
-
-        ggml_backend_metal_log_allocated_size(device, size_aligned);
-
-        ++ctx->n_buffers;
-    } else {
-        // this overlap between the views will guarantee that the tensor with the maximum size will fully fit into
-        // one of the views
-        const size_t size_ovlp = ((max_tensor_size + size_page - 1) / size_page + 1) * size_page; // round-up 2 pages just in case
-        const size_t size_step = device.maxBufferLength - size_ovlp;
-        const size_t size_view = device.maxBufferLength;
-
-        for (size_t i = 0; i < size; i += size_step) {
-            const size_t size_step_aligned = (i + size_view <= size) ? size_view : (size_aligned - i);
-
-            ctx->buffers[ctx->n_buffers].data  = (void *) ((uint8_t *) ptr + i);
-            ctx->buffers[ctx->n_buffers].size  = size_step_aligned;
+    // if one-buffer-per-tensor is on, we don't create buffers here.
+    // Instead we create them on-demand when a buffer for a tensor is
+    // requested.
+    if (!has_one_buffer_per_tensor) {
+        // the buffer fits into the max buffer size allowed by the device
+        if (size_aligned <= device.maxBufferLength) {
+            ctx->buffers[ctx->n_buffers].data  = ptr;
+            ctx->buffers[ctx->n_buffers].size  = size;
             ctx->buffers[ctx->n_buffers].metal = nil;
 
-            if (size_step_aligned > 0) {
-                ctx->buffers[ctx->n_buffers].metal = [device newBufferWithBytesNoCopy:(void *) ((uint8_t *) ptr + i) length:size_step_aligned options:MTLResourceStorageModeShared deallocator:nil];
+            if (size_aligned > 0) {
+                ctx->buffers[ctx->n_buffers].metal = [device newBufferWithBytesNoCopy:ptr length:size_aligned options:MTLResourceStorageModeShared deallocator:nil];
 
                 if (ctx->buffers[ctx->n_buffers].metal == nil) {
-                    GGML_LOG_ERROR("%s: error: failed to allocate buffer, size = %8.2f MiB\n", __func__, size_step_aligned / 1024.0 / 1024.0);
+                    GGML_LOG_ERROR("%s: error: failed to allocate buffer, size = %8.2f MiB\n", __func__, size_aligned / 1024.0 / 1024.0);
                     return false;
                 }
+
+                //GGML_LOG_DEBUG("%s: buffer set to volatile, size %zu\n", __func__, size_aligned);
+                [ctx->buffers[ctx->n_buffers].metal setPurgeableState:MTLPurgeableStateVolatile];
             }
 
-            ggml_backend_metal_log_allocated_size(device, size_step_aligned);
-
-            if (i + size_step < size) {
-                GGML_LOG_INFO("\n");
-            }
+            ggml_backend_metal_log_allocated_size(device, size_aligned);
 
             ++ctx->n_buffers;
-        }
-    }
+        } else {
+            // this overlap between the views will guarantee that the tensor with the maximum size will fully fit into
+            // one of the views
+            const size_t size_ovlp = ((max_tensor_size + size_page - 1) / size_page + 1) * size_page; // round-up 2 pages just in case
+            const size_t size_step = device.maxBufferLength - size_ovlp;
+            const size_t size_view = device.maxBufferLength;
 
-    if (!ggml_backend_metal_buffer_rset_init(ctx, ctx_dev, device)) {
-        GGML_LOG_ERROR("%s: error: failed to initialize residency set\n", __func__);
-        free(ctx);
-        ggml_backend_metal_device_rel(ctx_dev);
-        return NULL;
+            for (size_t i = 0; i < size; i += size_step) {
+                const size_t size_step_aligned = (i + size_view <= size) ? size_view : (size_aligned - i);
+
+                ctx->buffers[ctx->n_buffers].data  = (void *) ((uint8_t *) ptr + i);
+                ctx->buffers[ctx->n_buffers].size  = size_step_aligned;
+                ctx->buffers[ctx->n_buffers].metal = nil;
+
+                if (size_step_aligned > 0) {
+                    ctx->buffers[ctx->n_buffers].metal = [device newBufferWithBytesNoCopy:(void *) ((uint8_t *) ptr + i) length:size_step_aligned options:MTLResourceStorageModeShared deallocator:nil];
+
+                    if (ctx->buffers[ctx->n_buffers].metal == nil) {
+                        GGML_LOG_ERROR("%s: error: failed to allocate buffer, size = %8.2f MiB\n", __func__, size_step_aligned / 1024.0 / 1024.0);
+                        return false;
+                    }
+                    //GGML_LOG_DEBUG("%s: buffer set to volatile, size %zu\n", __func__, size_step_aligned);
+                    [ctx->buffers[ctx->n_buffers].metal setPurgeableState:MTLPurgeableStateVolatile];
+                }
+
+                ggml_backend_metal_log_allocated_size(device, size_step_aligned);
+
+                if (i + size_step < size) {
+                    GGML_LOG_INFO("\n");
+                }
+
+                ++ctx->n_buffers;
+            }
+        }
+        if (!ggml_backend_metal_buffer_rset_init(ctx, ctx_dev, device)) {
+            GGML_LOG_ERROR("%s: error: failed to initialize residency set\n", __func__);
+            free(ctx);
+            ggml_backend_metal_device_rel(ctx_dev);
+            return NULL;
+        }
+    } else {
+        GGML_LOG_INFO("%s: one-tensor-per-buffer is enabled; not allocating MTLBuffers up-front.\n", __func__);
     }
 
     return ggml_backend_buffer_init(ggml_backend_metal_buffer_from_ptr_type(), ggml_backend_metal_buffer_i, ctx, size);
