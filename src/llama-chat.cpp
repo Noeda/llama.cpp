@@ -183,6 +183,11 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_BAILING;
     } else if (tmpl_contains("<|header_start|>") && tmpl_contains("<|header_end|>")) {
         return LLM_CHAT_TEMPLATE_LLAMA4;
+    } else if (tmpl_contains("<|userprompt|>") &&
+               tmpl_contains("<|endofuserprompt|>") &&
+               tmpl_contains("<|response|>") &&
+               tmpl_contains("<|endofresponse|>")) {
+        return LLM_CHAT_TEMPLATE_DOTS1;
     }
     return LLM_CHAT_TEMPLATE_UNKNOWN;
 }
@@ -642,6 +647,21 @@ int32_t llm_chat_apply_template(
         }
         if (add_ass) {
             ss << "Assistant:";
+        }
+    } else if (tmpl == LLM_CHAT_TEMPLATE_DOTS1) {
+        // dots.llm1.inst (DOTS1)
+        for (auto message : chat) {
+            std::string role(message->role);
+            if (role == "system") {
+                ss << "<|system|>" << message->content << "<|endofsystem|>";
+            } else if (role == "user") {
+                ss << "<|userprompt|>" << message->content << "<|endofuserprompt|>";
+            } else if (role == "assistant") {
+                ss << "<|response|>" << message->content << "<|endofresponse|>";
+            }
+        }
+        if (add_ass) {
+            ss << "<|response|>";
         }
     } else {
         // template not supported
