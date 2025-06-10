@@ -5298,24 +5298,38 @@ class DotsModel(TextModel):
         super().set_gguf_parameters()
         hparams = self.hparams
 
-        n_head = self.find_hparam(['num_attention_heads', 'n_head'])
-        n_kv_head = hparams.get("num_key_value_heads")
+        # If  1) another rednote/dots-family model with similar arch is released,
+        # and 2) you want to use this DotsModel code to convert it to .gguf,
+        # and 3) it complains about "scoring_func" for the gating function,
+        #
+        # then adjust this code and figure out what the gating should be, if
+        # not just SIGMOID.
+        #
+        # As of writing of this, for dots.llm1.inst/dots.llm1.base, the
+        # 'scoring_func' is set to "noaux_tc" (same as Deepseek-V3-0324).
+        if hparams["scoring_func"] == "noaux_tc":
+            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+        else:
+            raise ValueError("Unsupported scoring_func value: {hparams['scoring_func']}")
 
-        self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
         self.gguf_writer.add_expert_feed_forward_length(hparams["moe_intermediate_size"])
         self.gguf_writer.add_expert_count(hparams["n_routed_experts"])
         self.gguf_writer.add_expert_shared_count(hparams["n_shared_experts"])
         self.gguf_writer.add_expert_weights_scale(hparams["routed_scaling_factor"])
         self.gguf_writer.add_expert_weights_norm(hparams["norm_topk_prob"])
-
         self.gguf_writer.add_leading_dense_block_count(hparams["first_k_dense_replace"])
 
+        # As of writing this comment (9 June 2025), YaRN context extension is
+        # unproven for dots.llm1.inst and dots.llm1.base models to go beyond
+        # 32k context length, according to:
+        # https://huggingface.co/rednote-hilab/dots.llm1.inst/discussions/3
+        #
+        # Try it at your own peril ;)
         rope_scaling = self.hparams.get("rope_scaling") or {}
         if rope_scaling.get("rope_type", rope_scaling.get("type")) == "yarn" and "factor" in rope_scaling:
             self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
             self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
             self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
-            self.gguf_writer.add_rope_scaling_yarn_log_mul(0.1 * rope_scaling["mscale_all_dim"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # rename e_score_correction_bias tensors
@@ -5328,58 +5342,40 @@ class DotsModel(TextModel):
         if match and int(match.group(1)) >= block_count:
             return []
 
-        # process the experts separately
-        if name.find("mlp.experts") != -1:
-            n_experts = self.hparams["n_routed_experts"]
-            assert bid is not None
+        if name.find("mlp.experts") == -1:
+            return []
 
-            if self._experts is None:
-                self._experts = [{} for _ in range(self.block_count)]
+        n_experts = self.hparams["n_routed_experts"]
+        assert bid is not None
 
-            self._experts[bid][name] = data_torch
+        if self._experts is None:
+            self._experts = [{} for _ in range(self.block_count)]
 
-            if len(self._experts[bid]) >= n_experts * 3:
-                tensors: list[tuple[str, Tensor]] = []
+        self._experts[bid][name] = data_torch
 
-                # merge the experts into a single 3d tensor
-                for w_name in ["down_proj", "gate_proj", "up_proj"]:
-                    datas: list[Tensor] = []
+        if len(self._experts[bid]) >= n_experts * 3:
+            tensors: list[tuple[str, Tensor]] = []
 
-                    for xid in range(n_experts):
-                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
-                        datas.append(self._experts[bid][ename])
-                        del self._experts[bid][ename]
+            # merge the experts into a single 3d tensor
+            for w_name in ["down_proj", "gate_proj", "up_proj"]:
+                datas: list[Tensor] = []
 
-                    data_torch = torch.stack(datas, dim=0)
+                for xid in range(n_experts):
+                    ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                    datas.append(self._experts[bid][ename])
+                    del self._experts[bid][ename]
 
-                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+                data_torch = torch.stack(datas, dim=0)
 
-                    new_name = self.map_tensor_name(merged_name)
+                merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
 
-                    tensors.append((new_name, data_torch))
-                return tensors
-            else:
-                return []
+                new_name = self.map_tensor_name(merged_name)
 
-        # note: MLA with the absorption optimization, needs these two split and k_b_proj transposed
-        if name.endswith("kv_b_proj.weight"):
-            name_kb = name.replace("kv_b_proj", "k_b_proj")
-            name_vb = name.replace("kv_b_proj", "v_b_proj")
+                tensors.append((new_name, data_torch))
 
-            n_head_kv = self.hparams["num_key_value_heads"]
-            v_head_dim = self.hparams["v_head_dim"]
-            qk_nope_head_dim = self.hparams["qk_nope_head_dim"]
-
-            assert data_torch.shape[0] == n_head_kv * (v_head_dim + qk_nope_head_dim)
-
-            kv_b = data_torch.view(n_head_kv, v_head_dim + qk_nope_head_dim, data_torch.shape[-1])
-            k_b, v_b = torch.split(kv_b, [qk_nope_head_dim, v_head_dim], dim=1)
-            k_b = k_b.transpose(1, 2)
-
-            return [
-                (self.map_tensor_name(name_kb), k_b),
-                (self.map_tensor_name(name_vb), v_b)
-            ]
+            return tensors
+        else:
+            return []
 
         return [(self.map_tensor_name(name), data_torch)]
 
