@@ -5342,40 +5342,38 @@ class DotsModel(TextModel):
         if match and int(match.group(1)) >= block_count:
             return []
 
-        if name.find("mlp.experts") == -1:
-            return []
+        if name.find("mlp.experts") != -1:
+            n_experts = self.hparams["n_routed_experts"]
+            assert bid is not None
 
-        n_experts = self.hparams["n_routed_experts"]
-        assert bid is not None
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
 
-        if self._experts is None:
-            self._experts = [{} for _ in range(self.block_count)]
+            self._experts[bid][name] = data_torch
 
-        self._experts[bid][name] = data_torch
+            if len(self._experts[bid]) >= n_experts * 3:
+                tensors: list[tuple[str, Tensor]] = []
 
-        if len(self._experts[bid]) >= n_experts * 3:
-            tensors: list[tuple[str, Tensor]] = []
+                # merge the experts into a single 3d tensor
+                for w_name in ["down_proj", "gate_proj", "up_proj"]:
+                    datas: list[Tensor] = []
 
-            # merge the experts into a single 3d tensor
-            for w_name in ["down_proj", "gate_proj", "up_proj"]:
-                datas: list[Tensor] = []
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
 
-                for xid in range(n_experts):
-                    ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
-                    datas.append(self._experts[bid][ename])
-                    del self._experts[bid][ename]
+                    data_torch = torch.stack(datas, dim=0)
 
-                data_torch = torch.stack(datas, dim=0)
+                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
 
-                merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+                    new_name = self.map_tensor_name(merged_name)
 
-                new_name = self.map_tensor_name(merged_name)
+                    tensors.append((new_name, data_torch))
 
-                tensors.append((new_name, data_torch))
-
-            return tensors
-        else:
-            return []
+                return tensors
+            else:
+                return []
 
         return [(self.map_tensor_name(name), data_torch)]
 
