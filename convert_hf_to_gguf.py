@@ -5310,7 +5310,7 @@ class DotsModel(TextModel):
         if hparams["scoring_func"] == "noaux_tc":
             self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
         else:
-            raise ValueError("Unsupported scoring_func value: {hparams['scoring_func']}")
+            raise ValueError(f"Unsupported scoring_func value: {hparams['scoring_func']}")
 
         self.gguf_writer.add_expert_feed_forward_length(hparams["moe_intermediate_size"])
         self.gguf_writer.add_expert_count(hparams["n_routed_experts"])
